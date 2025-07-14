@@ -1,4 +1,4 @@
-// do not change the order of the include 
+// do not change the order of the include
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <linux/if_ether.h>
@@ -11,7 +11,6 @@
 //     __uint(max_entries, 256);
 // } rxcnt SEC(".maps");
 
-
 SEC("xdp") int xdp_prog_simple(struct xdp_md *ctx) {
   // void *data_end = (void *)(long)ctx->data_end;
   // void *data = (void *)(long)ctx->data;
@@ -19,7 +18,7 @@ SEC("xdp") int xdp_prog_simple(struct xdp_md *ctx) {
   // __u16 h_proto;
   // __u32 key = 0;
   // long *value;
-  
+
   // if(data + sizeof(struct ethhdr) > data_end){
   //   return XDP_DROP;
   // }
@@ -33,11 +32,10 @@ SEC("xdp") int xdp_prog_simple(struct xdp_md *ctx) {
   //   }
   //   return XDP_DROP;
   // }
-  
+
   bpf_printk("Hello from XDP kernel program!\n");
-  return XDP_DROP;
+  return XDP_PASS;
 }
 
 char _license[] SEC("license") = "GPL";
 __u32 VERSION SEC("version") = 1;
-
