@@ -1,5 +1,6 @@
 #ifndef SOCKET_H
 #define SOCKET_H
+#include <alloca.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <getopt.h>
@@ -10,6 +11,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <wait.h>
+#include <stdbool.h>
+#include <wchar.h>
+#include <locale.h>
 #include "mpi_global_variable.h"
 #include "mpi_struct.h"
 #include "mpi_collective.c"

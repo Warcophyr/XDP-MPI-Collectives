@@ -11,10 +11,10 @@ typedef struct MPI_process_info {
 } MPI_process_info;
 
 typedef struct mpi_msg_header {
-  int32_t src;
-  int32_t dest;
-  int32_t tag;
-  int32_t length;
+  int src;
+  int dest;
+  int tag;
+  int length;
   MPI_Datatype type;
 } mpi_msg_header;
 
@@ -36,4 +36,17 @@ typedef enum MPI_Datatype {
   MPI_C_BOOL,
   MPI_WCHAR
 } MPI_Datatype;
+
+typedef enum MPI_Tag {
+  MPI_ANY_TAG,
+  MPI_SEND,
+  MPI_BCAST,
+  MPI_REDUCE,
+  MPI_SCATTER,
+  MPI_GATHER,
+  MPI_ALL_REDUCE,
+  MPI_ALL_GATHER,
+  MPI_TAG_UB
+} MPI_Tag;
+
 #endif

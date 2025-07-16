@@ -3,6 +3,8 @@
 #include "mpi_collective.h"
 
 int main(int argc, char *argv[]) {
+  setlocale(LC_ALL, "");
+  setlocale(LC_NUMERIC, "C.UTF-8");
 
   int option = 0;
   int option_index = 0;
