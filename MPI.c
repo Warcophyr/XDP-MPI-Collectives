@@ -50,14 +50,17 @@ int main(int argc, char *argv[]) {
     pid_t pid = fork();
     if (pid == 0) {
       MPI_PROCESS = mpi_init(i);
-      printf("rank: %d\n", MPI_PROCESS->rank);
+      // printf("rank: %d\n", MPI_PROCESS->rank);
       if (MPI_PROCESS->rank == 1) {
-
-        mpi_send(MPI_PROCESS->socket_fd[2], 1, 2, "ciao");
+        int msg[] = {0, 1};
+        // mpi_send(MPI_PROCESS->socket_fd[2], 1, 2, "ciao");
+        mpi_send_v2(msg, sizeof(msg), MPI_INT, 2, MPI_SEND);
       }
       if (MPI_PROCESS->rank == 2) {
 
-        mpi_recv(MPI_PROCESS->socket_fd[1]);
+        // mpi_recv(MPI_PROCESS->socket_fd[1]);
+        int msg[1024];
+        mpi_recv_v2(msg, 1, MPI_INT, 1, MPI_ANY_TAG);
       }
       exit(EXIT_SUCCESS);
     }

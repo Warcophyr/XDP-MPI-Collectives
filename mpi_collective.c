@@ -54,7 +54,7 @@ int connect_to_peer(int peer_rank, int my_rank) {
   return socket_fd;
 }
 
-int size_type(int count, MPI_Datatype datatype) {
+int datatype_size_in_bytes(int count, MPI_Datatype datatype) {
   int res = -1;
   switch (datatype) {
   case MPI_CHAR:
@@ -111,20 +111,20 @@ int size_type(int count, MPI_Datatype datatype) {
   return res;
 }
 
-void mpi_send(int fd, int src, int dest, const char *msg) {
-  mpi_msg_header hdr = {src, dest, 0, strlen(msg)};
-  send(fd, &hdr, sizeof(hdr), 0);
-  send(fd, msg, hdr.length, 0);
-}
+// void mpi_send(int fd, int src, int dest, const char *msg) {
+//   mpi_msg_header hdr = {src, dest, 0, strlen(msg)};
+//   send(fd, &hdr, sizeof(hdr), 0);
+//   send(fd, msg, hdr.length, 0);
+// }
 
 int mpi_send_v2(const void *buf, int count, MPI_Datatype datatype, int dest,
                 MPI_Tag tag) {
-  count = size_type(count, datatype);
-  if (count < 0) {
+  int size = datatype_size_in_bytes(count, datatype);
+  if (size < 0) {
     perror("can not send negative byte\n");
     exit(EXIT_FAILURE);
   }
-  mpi_msg_header hdr = {MPI_PROCESS->rank, dest, tag, count, datatype};
+  mpi_msg_header hdr = {MPI_PROCESS->rank, dest, tag, size, datatype};
 
   send(MPI_PROCESS->socket_fd[dest], &hdr, sizeof(hdr), 0);
   send(MPI_PROCESS->socket_fd[dest], buf, hdr.length, 0);
@@ -146,116 +146,115 @@ void mpi_recv(int fd) {
 void print_mpi_message(void *buf, int length, MPI_Datatype datatype) {
   switch (datatype) {
   case MPI_CHAR:
-    char *arr = (char *)buf;
+    char *arr_c = (char *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%c", arr[i]);
+      printf("%c", arr_c[i]);
     }
     printf("\n");
-
     break;
   case MPI_SIGNED_CHAR:
-    signed char *arr = (signed char *)buf;
+    signed char *arr_sc = (signed char *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%hhd", arr[i]);
+      printf("%hhd", arr_sc[i]);
     }
     printf("\n");
     break;
   case MPI_UNSIGNED_CHAR:
-    unsigned char *arr = (unsigned char *)buf;
+    unsigned char *arr_uc = (unsigned char *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%hhu", arr[i]);
+      printf("%hhu", arr_uc[i]);
     }
     printf("\n");
     break;
   case MPI_SHORT:
-    short *arr = (short *)buf;
+    short *arr_s = (short *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%hd", arr[i]);
+      printf("%hd", arr_s[i]);
     }
     printf("\n");
     break;
   case MPI_UNSIGNED_SHORT:
-    unsigned short *arr = (short *)buf;
+    unsigned short *arr_us = (short *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%hu", arr[i]);
+      printf("%hu", arr_us[i]);
     }
     printf("\n");
     break;
   case MPI_INT:
-    int *arr = (int *)buf;
+    int *arr_i = (int *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%d", arr[i]);
+      printf("%d", arr_i[i]);
     }
     printf("\n");
     break;
   case MPI_UNSIGNED:
-    unsigned *arr = (unsigned *)buf;
+    unsigned *arr_u = (unsigned *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%u", arr[i]);
+      printf("%u", arr_u[i]);
     }
     printf("\n");
     break;
   case MPI_LONG:
-    long *arr = (long *)buf;
+    long *arr_l = (long *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%ld", arr[i]);
+      printf("%ld", arr_l[i]);
     }
     printf("\n");
     break;
   case MPI_UNSIGNED_LONG:
-    unsigned long *arr = (unsigned long *)buf;
+    unsigned long *arr_ul = (unsigned long *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%lu", arr[i]);
+      printf("%lu", arr_ul[i]);
     }
     printf("\n");
     break;
   case MPI_LONG_LONG:
-    long long *arr = (long long *)buf;
+    long long *arr_ll = (long long *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%lld", arr[i]);
+      printf("%lld", arr_ll[i]);
     }
     printf("\n");
     break;
   case MPI_UNSIGNED_LONG_LONG:
-    unsigned long long *arr = (unsigned long long *)buf;
+    unsigned long long *arr_ull = (unsigned long long *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%llu", arr[i]);
+      printf("%llu", arr_ull[i]);
     }
     printf("\n");
     break;
   case MPI_FLOAT:
-    float *arr = (float *)buf;
+    float *arr_f = (float *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%f", arr[i]);
+      printf("%f", arr_f[i]);
     }
     printf("\n");
     break;
   case MPI_DOUBLE:
-    double *arr = (double *)buf;
+    double *arr_d = (double *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%f", arr[i]);
+      printf("%f", arr_d[i]);
     }
     printf("\n");
     break;
   case MPI_LONG_DOUBLE:
-    long double *arr = (long double *)buf;
+    long double *arr_ld = (long double *)buf;
     for (size_t i = 0; i < length; i++) {
-      printf("%Lf", arr[i]);
+      printf("%Lf", arr_ld[i]);
     }
     printf("\n");
     break;
   case MPI_C_BOOL:
-    bool *arr = (bool *)buf;
-    if (arr[0]) {
+    bool *arr_b = (bool *)buf;
+    if (arr_b[0]) {
       printf("True\n");
     } else {
       printf("False\n");
     }
     break;
   case MPI_WCHAR:
-    long double *arr = (long double *)buf;
+    wchar_t *arr_wc = (wchar_t *)buf;
     for (size_t i = 0; i < length; i++) {
-      wprintf(L"%lc", arr[i]);
+      wprintf(L"%lc", arr_wc[i]);
     }
     wprintf(L"\n");
     break;
@@ -272,11 +271,10 @@ void mpi_recv_v2(void *buf, int count, MPI_Datatype datatype, int source,
   if (n <= 0)
     return;
 
-  void *buffer = alloca(hdr.length + 1);
-  recv(MPI_PROCESS->socket_fd[source], buffer, hdr.length, 0);
+  recv(MPI_PROCESS->socket_fd[source], buf, hdr.length, 0);
   // buffer[hdr.length] = '\0';
 
-  printf("Rank %d received from %d: %s\n", hdr.dest, hdr.src, buffer);
+  print_mpi_message(buf, hdr.length, datatype);
 };
 
 MPI_process_info *mpi_init(int rank) {

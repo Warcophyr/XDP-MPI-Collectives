@@ -5,19 +5,6 @@
 
 #ifndef MPI_STRUCT_H
 #define MPI_STRUCT_H
-typedef struct MPI_process_info {
-  int rank;
-  int *socket_fd;
-} MPI_process_info;
-
-typedef struct mpi_msg_header {
-  int src;
-  int dest;
-  int tag;
-  int length;
-  MPI_Datatype type;
-} mpi_msg_header;
-
 typedef enum MPI_Datatype {
   MPI_CHAR,
   MPI_SIGNED_CHAR,
@@ -48,5 +35,16 @@ typedef enum MPI_Tag {
   MPI_ALL_GATHER,
   MPI_TAG_UB
 } MPI_Tag;
+typedef struct MPI_process_info {
+  int rank;
+  int *socket_fd;
+} MPI_process_info;
 
+typedef struct mpi_msg_header {
+  int src;
+  int dest;
+  int tag;
+  int length;
+  MPI_Datatype type;
+} mpi_msg_header;
 #endif
