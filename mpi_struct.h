@@ -5,6 +5,9 @@
 
 #ifndef MPI_STRUCT_H
 #define MPI_STRUCT_H
+
+#define MPI_ANY_TAG 0
+#define MPI_TAG_UB 32179
 typedef enum MPI_Datatype {
   MPI_CHAR,
   MPI_SIGNED_CHAR,
@@ -24,17 +27,6 @@ typedef enum MPI_Datatype {
   MPI_WCHAR
 } MPI_Datatype;
 
-typedef enum MPI_Tag {
-  MPI_ANY_TAG,
-  MPI_SEND,
-  MPI_BCAST,
-  MPI_REDUCE,
-  MPI_SCATTER,
-  MPI_GATHER,
-  MPI_ALL_REDUCE,
-  MPI_ALL_GATHER,
-  MPI_TAG_UB
-} MPI_Tag;
 typedef struct MPI_process_info {
   int rank;
   int *socket_fd;

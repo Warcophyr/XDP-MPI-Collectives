@@ -74,3 +74,59 @@ static long double ntohLd(uint128_t v) {
   memcpy(&d, &v, sizeof(d));
   return d;
 }
+
+int generic_hton(void *out, const void *in, size_t element_size, size_t count) {
+  const char *input = (const char *)in;
+  char *output = (char *)out;
+
+  for (size_t i = 0; i < count; i++) {
+    const void *src = input + (i * element_size);
+    void *dest = output + (i * element_size);
+
+    switch (element_size) {
+    case 1: {
+      // uint8_t temp;
+      // memcpy(&temp, src, 1);
+      // temp = htons(temp);
+      // memcpy(dest, &temp, 1);
+      memcpy(dest, src, 1);
+      break;
+    }
+    case 2: {
+      uint16_t temp;
+      memcpy(&temp, src, 2);
+      temp = htons(temp);
+      memcpy(dest, &temp, 2);
+      break;
+    }
+    case 4: {
+      uint32_t temp;
+      memcpy(&temp, src, 4);
+      temp = htonl(temp);
+      memcpy(dest, &temp, 4);
+      break;
+    }
+    case 8: {
+      uint64_t temp;
+      memcpy(&temp, src, 8);
+      temp = htonll(temp);
+      memcpy(dest, &temp, 8);
+      break;
+    }
+    case 16: {
+      uint128_t temp;
+      memcpy(&temp, src, 16);
+      temp = hton128(temp);
+      memcpy(dest, &temp, 16);
+      break;
+    }
+    default:
+      // Unsupported size
+      return -1;
+    }
+  }
+  return count;
+}
+
+#define generic_ntoh(out, in, element_size, count)                             \
+  generic_hton(out, in, element_size, count)

@@ -21,6 +21,11 @@
 
 int create_server_socket(int port);
 int connect_to_peer(int peer_rank, int my_rank);
-void mpi_send(int fd, int src, int dest, const char *msg);
-void mpi_recv(int fd);
 MPI_process_info *mpi_init(int rank);
+void print_mpi_message(void *buf, int length, MPI_Datatype datatype);
+int datatype_size_in_bytes(int count, MPI_Datatype datatype);
+int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
+             int tag);
+int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag);
+
+int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root);

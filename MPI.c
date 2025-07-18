@@ -46,21 +46,30 @@ int main(int argc, char *argv[]) {
       break;
     }
   }
-  // printf("%lu\n", sizeof(float));
+  int x;
   for (int i = 0; i < WORD_SIZE; i++) {
     pid_t pid = fork();
     if (pid == 0) {
       MPI_PROCESS = mpi_init(i);
-      // printf("rank: %d\n", MPI_PROCESS->rank);
       if (MPI_PROCESS->rank == 1) {
-        double msg[] = {1.1, 2.9, 3.3};
-        mpi_send_v2(msg, 3, MPI_DOUBLE, 2, MPI_SEND);
-      }
-      if (MPI_PROCESS->rank == 2) {
 
-        double msg[1024];
-        mpi_recv_v2(msg, 3, MPI_DOUBLE, 1, MPI_ANY_TAG);
+        x = 42;
       }
+      // sleep(3);
+      // mpi_barrier();
+      mpi_bcast(&x, 1, MPI_INT, 0);
+      printf("Rank: %d, x = %d\n", MPI_PROCESS->rank, x);
+      // if (MPI_PROCESS->rank == 1) {
+      //   int msg[] = {1, 2, 3};
+      //   mpi_send(msg, 3, MPI_INT, 2, 1);
+      // }
+      // if (MPI_PROCESS->rank == 2) {
+
+      //   int msg[1024];
+      //   mpi_recv(msg, 3, MPI_INT, 1, 2);
+      //   // printf("%s\n", msg);
+      //   print_mpi_message(msg, 3, MPI_INT);
+      // }
       exit(EXIT_SUCCESS);
     }
   }
