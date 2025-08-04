@@ -1,23 +1,28 @@
 CLANG        := clang
 GCC          := gcc
-KFLAGS       := -O2 -target bpf
+KFLAGS       := -O2 -g -target bpf
 UFLAGS       := -O2 -Wall
-LIBS         := -lbpf -lelf -lz -lxdp
+LIBS         := -lbpf -lelf -lz -lxdp -lm
 
 KOBJ         := xdp_prog_kern.o
+KMAP         := xdp_map_mpi.o
 ULOADER      := xdp_loader
-BRODCAST     := MPI
+MPI     	 := MPI
 
-all: $(KOBJ) $(ULOADER) $(BRODCAST)
+all: $(KOBJ) $(ULOADER) $(MPI) $(KMAP)
+
 
 $(KOBJ): xdp_prog_kern.c
+	$(CLANG) $(KFLAGS) -c $< -o $@
+
+$(KMAP): xdp_map_mpi.c
 	$(CLANG) $(KFLAGS) -c $< -o $@
 
 $(ULOADER): xdp_loader.c $(KOBJ)
 	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
 
-$(BRODCAST): MPI.c 
-	$(GCC) $< -o $@
+$(MPI): MPI.c 
+	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
 
 clean:
 	rm -f $(KOBJ) $(ULOADER)

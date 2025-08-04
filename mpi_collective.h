@@ -1,10 +1,10 @@
-#ifndef SOCKET_H
-#define SOCKET_H
+#pragma once
 #include <alloca.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <getopt.h>
 #include <errno.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <string.h>
 #include <unistd.h>
@@ -14,18 +14,40 @@
 #include <stdbool.h>
 #include <wchar.h>
 #include <locale.h>
+#include <sys/resource.h>
+#include <net/if.h>
+#include <bpf/libbpf.h>
+#include <bpf/bpf.h>
+#include <xdp/xsk.h>
+#include <linux/if_link.h>
 #include "mpi_global_variable.h"
 #include "mpi_struct.h"
+#include "my_ebpf.h"
 #include "mpi_collective.c"
-#endif
+#include "hton.h"
+#include "packet.h"
+#include <math.h>
+#include <linux/if_packet.h>
+#include <net/ethernet.h>
+#include <netinet/ether.h>
 
-int create_server_socket(int port);
-int connect_to_peer(int peer_rank, int my_rank);
-MPI_process_info *mpi_init(int rank);
-void print_mpi_message(void *buf, int length, MPI_Datatype datatype);
+int extract_5tuple(int sockfd, struct socket_id *id);
+int create_udp_socket(int port);
+MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
+                           int mpi_send_map_fd);
 int datatype_size_in_bytes(int count, MPI_Datatype datatype);
+void print_mpi_message(void *buf, int length, MPI_Datatype datatype);
+static int queue_enqueue(__u32 qid, packet_info val);
 int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
              int tag);
+int mpi_send_xdp(const void *buf, int count, MPI_Datatype datatype, int dest,
+                 int tag, packet_info *value);
 int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag);
 
+int mpi_barrier(void);
+
+/* Enqueue `val` into queue `qid`. Returns 0 on success, -1 if full. */
+
 int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root);
+
+int mpi_bcast_ring(void *buf, int count, MPI_Datatype datatype, int root);

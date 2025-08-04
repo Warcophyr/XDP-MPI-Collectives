@@ -7,12 +7,31 @@
 #include <net/if.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
+#include <xdp/xsk.h>
+#include <linux/if_link.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 struct ebpf_loader {
   struct bpf_object *obj;
   struct bpf_program *prog;
   struct bpf_link *link;
   int prog_fd;
+};
+
+struct xsk_socket {
+  struct xsk_socket *xsk;
+  struct xsk_umem *umem;
+  struct xsk_ring_prod fill;
+  struct xsk_ring_cons comp;
+  struct xsk_ring_cons rx;
+  struct xsk_ring_prod tx;
+};
+
+struct sockaddr_info {
+  __u16 sin_family;
+  __u16 sin_port;
+  __u32 sin_addr;
 };
 
 // Initialize the loader
@@ -198,11 +217,36 @@ int main(int argc, char **argv) {
   printf("Press Ctrl+C to exit...\n");
 
   // Example: access a map if it exists
-  int map_fd = ebpf_loader_get_map_fd(&loader, "my_map");
+  char my_map[] = "xdp_redirect_map";
+  int map_fd = ebpf_loader_get_map_fd(&loader, my_map);
   if (map_fd >= 0) {
-    printf("Found map 'my_map' with FD: %d\n", map_fd);
+    printf("Found map '%s' with FD: %d\n", my_map, map_fd);
   }
 
+  // int xsks_map_fd = ebpf_loader_get_map_fd(&loader, "xsks_map");
+  // if (xsks_map_fd < 0) {
+  //   fprintf(stderr, "ERROR: failed to open xsks_map\n");
+  //   exit(1);
+  // }
+
+  // for (int q = 0; q < 10; q++) {
+  //   struct xsk_socket xsk = {0};
+  //   int xsk_fd = setup_af_xdp_socket(argv[1], q, &xsk);
+  //   if (xsk_fd < 0) {
+  //     fprintf(stderr, "ERROR: could not set up AF_XDP on queue %d\n", q);
+  //     continue;
+  //   }
+
+  //   __u32 key = q;
+  //   __u32 value = xsk_fd;
+  //   if (bpf_map_update_elem(xsks_map_fd, &key, &value, 0) < 0) {
+  //     fprintf(stderr, "ERROR: bpf_map_update_elem(xsks_map, %u→%u): %s\n",
+  //     key,
+  //             value, strerror(errno));
+  //   } else {
+  //     printf("AF_XDP socket fd %d bound to xsks_map[%u]\n", value, key);
+  //   }
+  // }
   // Wait for signal
   pause();
 
