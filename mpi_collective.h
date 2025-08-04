@@ -23,9 +23,9 @@
 #include "mpi_global_variable.h"
 #include "mpi_struct.h"
 #include "my_ebpf.h"
-#include "mpi_collective.c"
 #include "hton.h"
 #include "packet.h"
+#include "mpi_collective.c"
 #include <math.h>
 #include <linux/if_packet.h>
 #include <net/ethernet.h>

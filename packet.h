@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <net/ethernet.h>
 #include <netinet/ip.h>
+#include "packet.c"
 
 static uint16_t ip_checksum(void *vdata, size_t length);
 

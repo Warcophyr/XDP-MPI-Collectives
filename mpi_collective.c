@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include "mpi_collective.h"
-
 size_t WORD_SIZE = 1;
 MPI_process_info *MPI_PROCESS = NULL;
 // Global peer address table
