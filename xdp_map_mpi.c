@@ -124,18 +124,6 @@ static __always_inline int queue_dequeue(__u32 qid, packet_info *out) {
   return 0;
 }
 
-// Simple hash function for packet identification
-static __always_inline __u64 packet_hash(struct iphdr *iph,
-                                         struct udphdr *udph) {
-  __u64 hash = 0;
-  hash ^= (__u64)iph->saddr;
-  hash ^= (__u64)iph->daddr << 16;
-  hash ^= (__u64)bpf_ntohs(udph->source) << 32;
-  hash ^= (__u64)bpf_ntohs(udph->dest) << 48;
-  hash ^= (__u64)iph->id;
-  return hash;
-}
-
 SEC("xdp")
 int xdp_prog(struct xdp_md *ctx) {
   void *data = (void *)(long)ctx->data;

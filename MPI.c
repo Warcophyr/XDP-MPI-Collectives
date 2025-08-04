@@ -133,9 +133,6 @@ int main(int argc, char *argv[]) {
 
   while (wait(NULL) > 0)
     ;
-  // char **all_map_name[1];
-  char map_name[] = "mpi_sockets_map";
-  // all_map_name[0] = map_name;
-  ebpf_loader_cleanup(&loader, map_name, 1);
+  ebpf_loader_cleanup(&loader);
   return EXIT_SUCCESS;
 }

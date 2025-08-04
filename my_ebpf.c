@@ -138,30 +138,7 @@ int ebpf_loader_attach_by_index(struct ebpf_loader *loader,
 }
 
 // Detach and cleanup
-void ebpf_loader_cleanup(struct ebpf_loader *loader, char *maps_name,
-                         int num_maps) {
-  if (maps_name != NULL) {
-    // for (size_t i = 0; i < num_maps; i++) {
-    char path[] = "/sys/fs/bpf/";
-    char path_file[strlen(path) + strlen(maps_name) + 1];
-
-    // Use snprintf for safer string concatenation
-    snprintf(path_file, sizeof(path_file), "%s%s", path, maps_name);
-    // if (loader->obj) {
-    //   if (bpf_object__unpin_maps(loader->obj, path_file) < 0) {
-    //     fprintf(stderr, "WARNING: failed unpin_maps: %s\n", strerror(errno));
-    //   }
-    // }
-
-    // 2) Make sure the pin file itself is gone
-    if (access(path_file, F_OK) == 0) {
-      if (unlink(path_file) < 0) {
-        fprintf(stderr, "WARNING: unlink(%s) failed: %s\n", path_file,
-                strerror(errno));
-      }
-    }
-    // }
-  }
+void ebpf_loader_cleanup(struct ebpf_loader *loader) {
   if (loader->link) {
     bpf_link__destroy(loader->link);
     loader->link = NULL;

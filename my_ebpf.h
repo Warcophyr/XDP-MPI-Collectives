@@ -38,8 +38,7 @@ int ebpf_loader_attach_by_index(struct ebpf_loader *loader,
                                 int interface_index);
 
 // Detach and cleanup
-void ebpf_loader_cleanup(struct ebpf_loader *loader, char *maps_name,
-                         int num_maps);
+void ebpf_loader_cleanup(struct ebpf_loader *loader);
 
 // Get program file descriptor
 int ebpf_loader_get_prog_fd(struct ebpf_loader *loader);
