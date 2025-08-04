@@ -103,7 +103,7 @@ int main(int argc, char *argv[]) {
       }
       fflush(stdout);
       // // mpi_barrier();
-      // mpi_bcast_ring(&x, 3, MPI_CHAR, 1);
+      // mpi_bcast(&x, 3, MPI_CHAR, 1);
       // if (MPI_PROCESS->rank == 0) {
       // ring_buffer__poll(rb, 100);
       // }
