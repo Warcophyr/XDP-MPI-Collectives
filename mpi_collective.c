@@ -38,7 +38,16 @@ int create_udp_socket(int port) {
   }
 
   int opt = 1;
-  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  struct timeval tv_out;
+  tv_out.tv_sec = 5;
+  tv_out.tv_usec = 0;
+  if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    perror("setsocketopt SO_REUSEADDR\n");
+  }
+  if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &tv_out, sizeof(tv_out)) <
+      0) {
+    perror("setsocketopt SO_RCVTIMEO\n");
+  }
 
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
@@ -1024,11 +1033,16 @@ int mpi_send_xdp(const void *buf, int count, MPI_Datatype datatype, int dest,
   opts.ctx_out = NULL;
   opts.ctx_size_in = 0;
   opts.ctx_size_out = 0;
+  // DECLARE_LIBBPF_OPTS(
+  //     bpf_test_run_opts, opts, .data_in = packet, .data_size_in = total_len,
+  //     .ctx_in = NULL, .ctx_size_in = 0, .repeat = 1,
+  //     .flags = BPF_F_TEST_XDP_LIVE_FRAMES, .batch_size = 1, .cpu = 0);
 
   printf("Testing XDP program with constructed packet (rank %d -> %d)...\n",
          MPI_PROCESS->rank, dest);
 
   int ret = bpf_prog_test_run_opts(EBPF_INFO.loader->prog_fd, &opts);
+  printf("bpf out: %d\n", opts.retval);
   // int ret =
   //     xdp_program__test_run(EBPF_INFO.loader->prog, &opts,
   //     BPF_PROG_TEST_RUN);

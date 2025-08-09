@@ -37,6 +37,7 @@
 #include <net/ethernet.h>
 #include <netinet/ether.h>
 #include <xdp/libxdp.h>
+#include <bpf/libbpf_legacy.h>
 
 int extract_5tuple(int sockfd, struct socket_id *id);
 int create_udp_socket(int port);

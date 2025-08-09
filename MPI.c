@@ -95,8 +95,8 @@ int main(int argc, char *argv[]) {
         x[1] = 'e';
         x[2] = 'c';
         packet_info value = {0};
-        mpi_send_raw(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
-        // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
+        // mpi_send_raw(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
+        mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
         // mpi_send(x, sizeof(x), MPI_CHAR, 0, 2);
       }
       if (MPI_PROCESS->rank == 0) {
