@@ -29,6 +29,76 @@ static uint16_t ip_checksum(void *vdata, size_t length) {
   return htons(~acc & 0xffff);
 }
 
+static uint16_t ipv4_checksum(void *buffer, int hdr_len) {
+  uint16_t *buf = (uint16_t *)buffer;
+  uint32_t sum = 0;
+  int count = hdr_len / 2; // number of 16-bit words
+
+  // Sum all 16-bit words
+  for (int i = 0; i < count; i++) {
+    sum += ntohs(buf[i]); // convert to host order before summing
+  }
+
+  // If hdr_len is odd (usually not), handle last byte padded with zero
+  if (hdr_len & 1) {
+    uint8_t *b = (uint8_t *)buffer;
+    sum += b[hdr_len - 1] << 8; // pad low byte with zero
+  }
+
+  // Add carries
+  while (sum >> 16) {
+    sum = (sum & 0xFFFF) + (sum >> 16);
+  }
+
+  // One's complement and return in network byte order
+  return htons(~sum);
+}
+
+static uint16_t udp_checksum(void *buffer, int len) {
+  uint16_t *buf = (uint16_t *)buffer;
+  uint32_t sum = 0;
+
+  while (len > 1) {
+    sum += *buf++;
+    len -= 2;
+  }
+
+  // If there's a byte left, add it (padding with zero)
+  if (len == 1) {
+    sum += *((uint8_t *)buf);
+  }
+
+  // Add carry bits
+  while (sum >> 16) {
+    sum = (sum & 0xFFFF) + (sum >> 16);
+  }
+
+  // One's complement
+  return (uint16_t)(~sum);
+}
+
+// static uint16_t ip_checksum(const void *vdata, size_t length) {
+//   const uint8_t *data = (const uint8_t *)vdata;
+//   uint32_t acc = 0;
+
+//   /* Sum 16-bit words in network order (big-endian) */
+//   for (size_t i = 0; i + 1 < length; i += 2) {
+//     acc += ((uint16_t)data[i] << 8) | (uint16_t)data[i + 1];
+//   }
+
+//   /* If there's a leftover odd byte, pad it as the high-order byte */
+//   if (length & 1) {
+//     acc += ((uint16_t)data[length - 1] << 8);
+//   }
+
+//   /* Fold carries */
+//   while (acc >> 16)
+//     acc = (acc & 0xFFFF) + (acc >> 16);
+
+//   uint16_t checksum = (uint16_t)~acc & 0xFFFF;
+//   return htons(checksum); /* return in network byte order */
+// }
+
 /**
  * build_eth_ipv4_packet()
  * -----------------------

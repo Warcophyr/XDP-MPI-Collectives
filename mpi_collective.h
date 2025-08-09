@@ -17,6 +17,12 @@
 #include <locale.h>
 #include <sys/resource.h>
 #include <net/if.h>
+
+// Raw socket includes - add these before other networking includes
+// #include <linux/if_packet.h>  // For AF_PACKET
+#include <linux/if_ether.h>   // For ETH_P_ALL
+#include <netpacket/packet.h> // For sockaddr_ll structure
+
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include <xdp/xsk.h>
@@ -28,10 +34,9 @@
 #include "packet.h"
 #include "mpi_collective.c"
 #include <math.h>
-// #include <linux/if_packet.h>
 #include <net/ethernet.h>
 #include <netinet/ether.h>
-#include <netpacket/packet.h>
+#include <xdp/libxdp.h>
 
 int extract_5tuple(int sockfd, struct socket_id *id);
 int create_udp_socket(int port);

@@ -187,27 +187,35 @@ int xdp_prog(struct xdp_md *ctx) {
 
     bpf_printk("XDP: Processing packet, eth_proto=0x%x",
                bpf_ntohs(eth->h_proto));
-    // bpf_printk("ETH: src=%02x:%02x:%02x:%02x:%02x:%02x "
-    //            "dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
-    //            eth->h_source[0], eth->h_source[1], eth->h_source[2],
-    //            eth->h_source[3], eth->h_source[4], eth->h_source[5],
-    //            eth->h_dest[0], eth->h_dest[1], eth->h_dest[2],
-    //            eth->h_dest[3], eth->h_dest[4], eth->h_dest[5]);
-    // __u32 saddr = iph->saddr;
-    // __u32 daddr = iph->daddr;
-    // bpf_printk("IP: src=%d.%d.%d.%d dst=%d.%d.%d.%d proto=%d ttl=%d\n",
-    //            ((unsigned char *)&saddr)[0], ((unsigned char *)&saddr)[1],
-    //            ((unsigned char *)&saddr)[2], ((unsigned char *)&saddr)[3],
-    //            ((unsigned char *)&daddr)[0], ((unsigned char *)&daddr)[1],
-    //            ((unsigned char *)&daddr)[2], ((unsigned char *)&daddr)[3],
-    //            iph->protocol, iph->ttl);
-    // bpf_printk("UDP: sport=%d dport=%d len=%d\n", bpf_ntohs(udph->source),
-    //            bpf_ntohs(udph->dest), bpf_ntohs(udph->len));
+    bpf_printk("ETH: src=%02x:%02x:%02x:%02x:%02x:%02x "
+               "dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
+               eth->h_source[0], eth->h_source[1], eth->h_source[2],
+               eth->h_source[3], eth->h_source[4], eth->h_source[5],
+               eth->h_dest[0], eth->h_dest[1], eth->h_dest[2], eth->h_dest[3],
+               eth->h_dest[4], eth->h_dest[5]);
+    __u32 saddr = iph->saddr;
+    __u32 daddr = iph->daddr;
+    __sum16 check = iph->check;
+    __be16 id = iph->id;
+    __be16 frag_off = iph->frag_off;
+    __sum16 check_udp = udph->check;
+    bpf_printk("IP: src=%d.%d.%d.%d dst=%d.%d.%d.%d proto=%d ttl=%d\n",
+               ((unsigned char *)&saddr)[0], ((unsigned char *)&saddr)[1],
+               ((unsigned char *)&saddr)[2], ((unsigned char *)&saddr)[3],
+               ((unsigned char *)&daddr)[0], ((unsigned char *)&daddr)[1],
+               ((unsigned char *)&daddr)[2], ((unsigned char *)&daddr)[3],
+               iph->protocol, iph->ttl);
+    bpf_printk("IP checksum: 0x%04x\n", __builtin_bswap16(check));
+    bpf_printk("IP ID: %u, Fragment offset + flags: 0x%x\n", id, frag_off);
+    bpf_printk("UDP: sport=%d dport=%d len=%d\n", bpf_ntohs(udph->source),
+               bpf_ntohs(udph->dest), bpf_ntohs(udph->len));
+    bpf_printk("UDP checksum: 0x%04x\n", __builtin_bswap16(check_udp));
     bpf_printk("XDP: IP packet, protocol=%d", iph->protocol);
-    bpf_printk("XDP: IP packet, %d->%d", iph->saddr, iph->daddr);
 
-    bpf_printk("XDP: UDP packet %d->%d", bpf_ntohs(udph->source),
-               bpf_ntohs(udph->dest));
+    // bpf_printk("XDP: IP packet, %d->%d", iph->saddr, iph->daddr);
+
+    // bpf_printk("XDP: UDP packet %d->%d", bpf_ntohs(udph->source),
+    //            bpf_ntohs(udph->dest));
     bpf_printk("XDP: MPI packet found %d->%d", value->src_procc,
                value->dst_procc);
 

@@ -8,6 +8,8 @@
 #include "packet.c"
 
 static uint16_t ip_checksum(void *vdata, size_t length);
+static uint16_t ipv4_checksum(void *buffer, int hdr_len);
+// static uint16_t ip_checksum(const void *vdata, size_t length);
 
 int build_eth_ipv4_packet(const uint8_t *payload, size_t payload_len,
                           uint8_t **out_packet, size_t *out_len);
