@@ -1,4 +1,5 @@
 #pragma once
+#define _GNU_SOURCE
 #include <alloca.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -27,9 +28,10 @@
 #include "packet.h"
 #include "mpi_collective.c"
 #include <math.h>
-#include <linux/if_packet.h>
+// #include <linux/if_packet.h>
 #include <net/ethernet.h>
 #include <netinet/ether.h>
+#include <netpacket/packet.h>
 
 int extract_5tuple(int sockfd, struct socket_id *id);
 int create_udp_socket(int port);

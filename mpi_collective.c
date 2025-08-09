@@ -739,9 +739,13 @@ int mpi_send_xdp(const void *buf, int count, MPI_Datatype datatype, int dest,
   // Copy source MAC from packet_info as destination MAC for our packet
   memcpy(dst_mac, &value->eth_hdr[6],
          ETH_ALEN); // Source MAC from received packet
-  // Copy destination MAC from packet_info as source MAC for our packet
+  // memcpy(dst_mac, 0xFF,
+  //        ETH_ALEN); // Source MAC from received packet
+  // // Copy destination MAC from packet_info as source MAC for our packet
   memcpy(src_mac, &value->eth_hdr[0],
          ETH_ALEN); // Dest MAC from received packet
+  // memcpy(src_mac, 0x00,
+  //        ETH_ALEN); // Dest MAC from received packet
 
   // Build the complete packet
   size_t eth_hdr_len = sizeof(struct ether_header);

@@ -77,8 +77,8 @@ int main(int argc, char *argv[]) {
 
   EBPF_INFO.loader = &loader;
   EBPF_INFO.mpi_sockets_map_fd = mpi_socket_map_fd;
-  EBPF_INFO.info_packet_arr_fd = mpi_send_map_fd;
-  EBPF_INFO.mpi_send_map_fd = info_packet_arr_fd;
+  EBPF_INFO.info_packet_arr_fd = info_packet_arr_fd;
+  EBPF_INFO.mpi_send_map_fd = mpi_send_map_fd;
   EBPF_INFO.queue_map_fd = queue_fd;
   EBPF_INFO.head_map_fd = head_fd;
   EBPF_INFO.tail_map_fd = tail_fd;
