@@ -70,20 +70,20 @@ int main(int argc, char *argv[]) {
 
   int mpi_socket_map_fd = ebpf_loader_get_map_fd(&loader, "mpi_sockets_map");
   int mpi_send_map_fd = ebpf_loader_get_map_fd(&loader, "mpi_send_map");
-  int info_packet_arr_fd = ebpf_loader_get_map_fd(&loader, "info_packet_arr");
-  int queue_fd = ebpf_loader_get_map_fd(&loader, "queue_map");
-  int head_fd = ebpf_loader_get_map_fd(&loader, "head_map");
-  int tail_fd = ebpf_loader_get_map_fd(&loader, "tail_map");
+  // int info_packet_arr_fd = ebpf_loader_get_map_fd(&loader,
+  // "info_packet_arr"); int queue_fd = ebpf_loader_get_map_fd(&loader,
+  // "queue_map"); int head_fd = ebpf_loader_get_map_fd(&loader, "head_map");
+  // int tail_fd = ebpf_loader_get_map_fd(&loader, "tail_map");
 
   EBPF_INFO.loader = &loader;
   EBPF_INFO.mpi_sockets_map_fd = mpi_socket_map_fd;
-  EBPF_INFO.info_packet_arr_fd = info_packet_arr_fd;
+  // EBPF_INFO.info_packet_arr_fd = info_packet_arr_fd;
   EBPF_INFO.mpi_send_map_fd = mpi_send_map_fd;
-  EBPF_INFO.queue_map_fd = queue_fd;
-  EBPF_INFO.head_map_fd = head_fd;
-  EBPF_INFO.tail_map_fd = tail_fd;
+  // EBPF_INFO.queue_map_fd = queue_fd;
+  // EBPF_INFO.head_map_fd = head_fd;
+  // EBPF_INFO.tail_map_fd = tail_fd;
 
-  char x[] = {'a', 'a', 'a'};
+  char x[] = {'a', 'a', 'a', 'a'};
   for (int rank = 0; rank < WORD_SIZE; rank++) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -94,23 +94,30 @@ int main(int argc, char *argv[]) {
         x[0] = 'm';
         x[1] = 'e';
         x[2] = 'c';
-        packet_info value = {0};
+        x[3] = 'c';
+        // packet_info value = {0};
         // mpi_send_raw(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
-        mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
+        // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
+        // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
         // mpi_send(x, sizeof(x), MPI_CHAR, 0, 2);
+        // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
+        // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
       }
-      if (MPI_PROCESS->rank == 0) {
-        mpi_recv(x, sizeof(x), MPI_CHAR, 1, 2);
-      }
+      // if (MPI_PROCESS->rank == 0) {
+      //   mpi_recv(x, sizeof(x), MPI_CHAR, 1, 2);
+      // }
+      // if (MPI_PROCESS->rank == 2) {
+      //   mpi_recv(x, sizeof(x), MPI_CHAR, 1, 2);
+      // }
       fflush(stdout);
       // // mpi_barrier();
-      // mpi_bcast(&x, 3, MPI_CHAR, 1);
+      mpi_bcast_ring(&x, 4, MPI_CHAR, 1);
       // if (MPI_PROCESS->rank == 0) {
       // ring_buffer__poll(rb, 100);
       // }
       // mpi_barrier();
       printf("Rank: %d: \n", MPI_PROCESS->rank);
-      for (size_t i = 0; i < 3; i++) {
+      for (size_t i = 0; i < sizeof(x); i++) {
         printf("%c ", x[i]);
       }
       printf("\n");
