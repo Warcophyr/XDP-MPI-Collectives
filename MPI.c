@@ -70,18 +70,18 @@ int main(int argc, char *argv[]) {
 
   int mpi_socket_map_fd = ebpf_loader_get_map_fd(&loader, "mpi_sockets_map");
   int mpi_send_map_fd = ebpf_loader_get_map_fd(&loader, "mpi_send_map");
-  // int info_packet_arr_fd = ebpf_loader_get_map_fd(&loader,
-  // "info_packet_arr"); int queue_fd = ebpf_loader_get_map_fd(&loader,
-  // "queue_map"); int head_fd = ebpf_loader_get_map_fd(&loader, "head_map");
-  // int tail_fd = ebpf_loader_get_map_fd(&loader, "tail_map");
+  int info_packet_arr_fd = ebpf_loader_get_map_fd(&loader, "info_packet_arr");
+  int queue_fd = ebpf_loader_get_map_fd(&loader, "queue_map");
+  int head_fd = ebpf_loader_get_map_fd(&loader, "head_map");
+  int tail_fd = ebpf_loader_get_map_fd(&loader, "tail_map");
 
   EBPF_INFO.loader = &loader;
   EBPF_INFO.mpi_sockets_map_fd = mpi_socket_map_fd;
-  // EBPF_INFO.info_packet_arr_fd = info_packet_arr_fd;
+  EBPF_INFO.info_packet_arr_fd = info_packet_arr_fd;
   EBPF_INFO.mpi_send_map_fd = mpi_send_map_fd;
-  // EBPF_INFO.queue_map_fd = queue_fd;
-  // EBPF_INFO.head_map_fd = head_fd;
-  // EBPF_INFO.tail_map_fd = tail_fd;
+  EBPF_INFO.queue_map_fd = queue_fd;
+  EBPF_INFO.head_map_fd = head_fd;
+  EBPF_INFO.tail_map_fd = tail_fd;
 
   char x[] = {'a', 'a', 'a', 'a'};
   for (int rank = 0; rank < WORD_SIZE; rank++) {
@@ -111,7 +111,7 @@ int main(int argc, char *argv[]) {
       // }
       fflush(stdout);
       // // mpi_barrier();
-      mpi_bcast_ring(&x, 4, MPI_CHAR, 1);
+      mpi_bcast(&x, 4, MPI_CHAR, 1);
       // if (MPI_PROCESS->rank == 0) {
       // ring_buffer__poll(rb, 100);
       // }
