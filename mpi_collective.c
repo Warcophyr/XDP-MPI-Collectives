@@ -784,6 +784,144 @@ int mpi_send_raw_blanch(const void *buf, int count, MPI_Datatype datatype,
   return count;
 }
 
+int mpi_send_raw_blanch_v2(int dest, MPI_Opcode opcode, int tag) {
+
+  int payload_info_for_xdp[] = {MPI_PROCESS->rank, dest, opcode};
+  int size = datatype_size_in_bytes(sizeof(payload_info_for_xdp) / sizeof(int),
+                                    MPI_INT);
+  if (size < 1) {
+    return -1;
+  }
+
+  // Create message with tag header (same as regular mpi_send)
+  int payload_size = size + sizeof(int);
+  void *message = malloc(payload_size);
+  if (!message) {
+    perror("malloc failed");
+    return -1;
+  }
+
+  // Add tag to message header
+  void *tag_send = message;
+  generic_hton(tag_send, &tag, sizeof(int), 1);
+
+  // Add data payload (same conversion logic as mpi_send)
+  void *buf_send = (char *)message + sizeof(int);
+  generic_hton(buf_send, payload_info_for_xdp, sizeof(int),
+               sizeof(payload_info_for_xdp) / sizeof(int));
+
+  uint8_t dst_mac[ETH_ALEN];
+  uint8_t src_mac[ETH_ALEN];
+
+  memset(dst_mac, 0x00, ETH_ALEN);
+  memset(src_mac, 0x00, ETH_ALEN);
+
+  // Build the complete packet
+  size_t eth_hdr_len = sizeof(struct ether_header);
+  size_t ip_hdr_len = sizeof(struct iphdr);
+  size_t udp_hdr_len = sizeof(struct udphdr);
+  size_t total_len = eth_hdr_len + ip_hdr_len + udp_hdr_len + payload_size;
+
+  uint8_t *packet = malloc(total_len);
+  if (!packet) {
+    free(message);
+    return -1;
+  }
+  memset(packet, 0, total_len);
+
+  // 1) Ethernet header
+  struct ether_header *eth = (struct ether_header *)packet;
+  memcpy(eth->ether_dhost, dst_mac, ETH_ALEN); // Use extracted dest MAC
+  memcpy(eth->ether_shost, src_mac,
+         ETH_ALEN); // Use extracted source MAC
+  eth->ether_type = htons(ETHERTYPE_IP);
+
+  // 2) IPv4 header
+  struct iphdr *ip = (struct iphdr *)(packet + eth_hdr_len);
+  ip->version = 4;
+  ip->ihl = ip_hdr_len / 4; // 5 words = 20 bytes
+  ip->tos = 0;
+  ip->tot_len = htons(ip_hdr_len + udp_hdr_len + payload_size);
+  ip->id = htons(0x1234);
+  ip->frag_off = htons(0x4000); // DF set
+  ip->ttl = 64;
+  ip->protocol = IPPROTO_UDP;
+
+  ip->saddr = 0; // use socket info from bpf map
+  ip->daddr = 0; // use socket info from bpf map
+  ip->check = 0;
+  ip->check = ip_checksum(ip, ip_hdr_len);
+
+  // 3) UDP header
+  struct udphdr *udp = (struct udphdr *)(packet + eth_hdr_len + ip_hdr_len);
+  udp->source = 0;
+  udp->dest = 0;
+  udp->len = htons(udp_hdr_len + payload_size);
+  udp->check = 0; // UDP checksum is optional for IPv4
+  // udp->check = udp_checksum(
+  //     udp, udp_hdr_len + payload_size);
+
+  // 4) Copy MPI payload (tag + data)
+  memcpy(packet + eth_hdr_len + ip_hdr_len + udp_hdr_len, message,
+         payload_size);
+
+  // Create raw socket for sending
+  int raw_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+  if (raw_socket < 0) {
+    perror("Failed to create raw socket");
+    free(message);
+    free(packet);
+    return -1;
+  }
+
+  // Determine the interface to send on
+  // You can get this from the ingress_ifindex in packet_info
+  int ifindex = 0;
+  if (ifindex == 0) {
+    // Fallback to loopback interface if no interface specified
+    ifindex = if_nametoindex("lo");
+    if (ifindex == 0) {
+      perror("Failed to get interface index");
+      close(raw_socket);
+      free(message);
+      free(packet);
+      return -1;
+    }
+  }
+
+  // Prepare sockaddr_ll for raw socket
+  struct sockaddr_ll socket_address;
+  socket_address.sll_family = AF_PACKET;
+  socket_address.sll_protocol = htons(ETH_P_ALL);
+  socket_address.sll_ifindex = ifindex;
+  socket_address.sll_halen = ETH_ALEN;
+  memcpy(socket_address.sll_addr, dst_mac, ETH_ALEN);
+
+  printf("Sending raw packet (rank %d -> %d) on interface %d...\n",
+         MPI_PROCESS->rank, dest, ifindex);
+
+  // Send the complete Ethernet frame via raw socket
+  ssize_t sent =
+      sendto(raw_socket, packet, total_len, 0,
+             (struct sockaddr *)&socket_address, sizeof(socket_address));
+
+  close(raw_socket);
+
+  if (sent != total_len) {
+    perror("Raw socket sendto failed");
+    printf("Sent %zd bytes out of %zu\n", sent, total_len);
+    free(message);
+    free(packet);
+    return -1;
+  }
+
+  printf("Successfully sent %zd bytes via raw socket\n", sent);
+
+  free(message);
+  free(packet);
+  return 0;
+}
+
 int mpi_send_raw(const void *buf, int count, MPI_Datatype datatype, int dest,
                  int tag, packet_info *value) {
 

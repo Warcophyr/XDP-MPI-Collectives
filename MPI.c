@@ -83,7 +83,7 @@ int main(int argc, char *argv[]) {
   EBPF_INFO.head_map_fd = head_fd;
   EBPF_INFO.tail_map_fd = tail_fd;
 
-  char x[] = {'a', 'a', 'a', 'a'};
+  int x[] = {1, 1, 1, 1};
   for (int rank = 0; rank < WORD_SIZE; rank++) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -91,10 +91,10 @@ int main(int argc, char *argv[]) {
                              EBPF_INFO.mpi_send_map_fd);
       if (MPI_PROCESS->rank == 1) {
 
-        x[0] = 'm';
-        x[1] = 'e';
-        x[2] = 'c';
-        x[3] = 'c';
+        x[0] = 2;
+        x[1] = 3;
+        x[2] = 4;
+        x[3] = 5;
         // packet_info value = {0};
         // mpi_send_raw(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
         // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
@@ -102,23 +102,25 @@ int main(int argc, char *argv[]) {
         // mpi_send(x, sizeof(x), MPI_CHAR, 0, 2);
         // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
         // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
+        mpi_send(&x, sizeof(x) / sizeof(int), MPI_INT, 0, 2);
+        mpi_send_raw_blanch_v2(2, MPI_BCAST, 9);
       }
-      // if (MPI_PROCESS->rank == 0) {
-      //   mpi_recv(x, sizeof(x), MPI_CHAR, 1, 2);
-      // }
-      // if (MPI_PROCESS->rank == 2) {
-      //   mpi_recv(x, sizeof(x), MPI_CHAR, 1, 2);
-      // }
+      if (MPI_PROCESS->rank == 0) {
+        mpi_recv(x, sizeof(x) / sizeof(int), MPI_INT, 1, 2);
+      }
+      if (MPI_PROCESS->rank == 2) {
+        mpi_recv(x, sizeof(x) / sizeof(int), MPI_INT, 1, 2);
+      }
       fflush(stdout);
       // // mpi_barrier();
-      mpi_bcast(&x, 4, MPI_CHAR, 1);
+      // mpi_bcast(&x, 4, MPI_CHAR, 1);
       // if (MPI_PROCESS->rank == 0) {
       // ring_buffer__poll(rb, 100);
       // }
       // mpi_barrier();
       printf("Rank: %d: \n", MPI_PROCESS->rank);
-      for (size_t i = 0; i < sizeof(x); i++) {
-        printf("%c ", x[i]);
+      for (size_t i = 0; i < sizeof(x) / sizeof(int); i++) {
+        printf("%d ", x[i]);
       }
       printf("\n");
 

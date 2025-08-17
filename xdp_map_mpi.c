@@ -370,6 +370,162 @@ static __always_inline int process_stored_packets() {
   return 0;
 }
 
+static __always_inline int copy_with_stored_packet(struct xdp_md *ctx,
+                                                   __u32 *payload_instruction) {
+  tuple_process key_tuple_process = {payload_instruction[1],
+                                     payload_instruction[2]};
+
+  socket_id *info_socket =
+      bpf_map_lookup_elem(&mpi_send_map, &key_tuple_process);
+  if (!info_socket) {
+    return XDP_PASS;
+  }
+
+  // Create socket info copy with proper validation
+  socket_id info_socket_copy = {0};
+  info_socket_copy.dst_ip = info_socket->dst_ip;
+  info_socket_copy.dst_port = info_socket->dst_port;
+  info_socket_copy.protocol = info_socket->protocol;
+  info_socket_copy.src_ip = info_socket->src_ip;
+  info_socket_copy.src_port = info_socket->src_port;
+
+  // Handle localhost addresses
+  if (info_socket_copy.src_ip == 16777343) {
+    info_socket_copy.src_ip = 0;
+  }
+  if (info_socket_copy.dst_ip == 16777343) {
+    info_socket_copy.dst_ip = 0;
+  }
+
+  void *data = (void *)(long)ctx->data;
+  void *data_end = (void *)(long)ctx->data_end;
+
+  // Validate current packet headers
+  struct ethhdr *eth = data;
+  if ((void *)(eth + 1) > data_end)
+    return XDP_ABORTED;
+
+  if (bpf_ntohs(eth->h_proto) != ETH_P_IP)
+    return XDP_ABORTED;
+
+  struct iphdr *iph = (void *)(eth + 1);
+  if ((void *)(iph + 1) > data_end)
+    return XDP_ABORTED;
+
+  if (iph->protocol != IPPROTO_UDP)
+    return XDP_ABORTED;
+
+  __u32 ip_hdr_len = iph->ihl * 4;
+  if (ip_hdr_len < 20 || ip_hdr_len > 60) // Validate IP header length
+    return XDP_ABORTED;
+
+  struct udphdr *udph = (void *)iph + ip_hdr_len;
+  if ((void *)(udph + 1) > data_end) {
+    return XDP_ABORTED;
+  }
+
+  // Get stored packet
+  __u32 key = 0;
+  struct full_packet *stored_pkt =
+      bpf_map_lookup_elem(&temp_packet_storage, &key);
+  if (!stored_pkt)
+    return XDP_ABORTED;
+
+  if (bpf_map_pop_elem(&mpi_packet_queue, stored_pkt) != 0) {
+    return XDP_ABORTED;
+  }
+
+  // Validate stored packet minimum size
+  if (stored_pkt->len < 42) { // ETH(14) + IP(20) + UDP(8) minimum
+    bpf_printk("Stored packet too short: %u bytes\n", stored_pkt->len);
+    return XDP_PASS;
+  }
+
+  // Parse stored packet headers with bounds checking
+  struct ethhdr *str_eth = (struct ethhdr *)stored_pkt->data;
+  if (bpf_ntohs(str_eth->h_proto) != ETH_P_IP) {
+    return XDP_PASS;
+  }
+
+  struct iphdr *str_iph = (struct iphdr *)(stored_pkt->data + 14);
+  if (str_iph->protocol != IPPROTO_UDP) {
+    return XDP_PASS;
+  }
+
+  __u32 str_ip_hdr_len = str_iph->ihl * 4;
+  if (str_ip_hdr_len < 20 ||
+      str_ip_hdr_len > 60) // Validate stored IP header length
+    return XDP_PASS;
+
+  // Calculate payload offsets with validation
+  __u32 current_payload_offset = 14 + ip_hdr_len + 8;
+  __u32 stored_payload_offset = 14 + str_ip_hdr_len + 8;
+
+  // Critical: Ensure stored_payload_offset is within bounds
+  if (stored_payload_offset >= MAX_PACKET_SIZE ||
+      stored_payload_offset >= stored_pkt->len) {
+    bpf_printk("Stored payload offset out of bounds: %u\n",
+               stored_payload_offset);
+    return XDP_PASS;
+  }
+
+  // Update packet headers
+  iph->saddr = info_socket_copy.src_ip;
+  iph->daddr = info_socket_copy.dst_ip;
+  udph->source = bpf_htons(info_socket_copy.src_port);
+  udph->dest = bpf_htons(info_socket_copy.dst_port);
+
+  // Get current packet payload pointer
+  void *current_payload = data + current_payload_offset;
+  if (current_payload > data_end) {
+    return XDP_ABORTED;
+  }
+
+  // Calculate safe copy limits
+  __u32 current_payload_space = data_end - current_payload;
+  __u32 stored_payload_size = stored_pkt->len - stored_payload_offset;
+
+  // Determine safe copy size - use minimum of all constraints
+  __u32 max_copy_size = 1472; // Max UDP payload in standard MTU
+  if (stored_payload_size < max_copy_size)
+    max_copy_size = stored_payload_size;
+  if (current_payload_space < max_copy_size)
+    max_copy_size = current_payload_space;
+
+  // CRITICAL: Ensure we don't exceed stored packet data array bounds
+  __u32 max_stored_access = MAX_PACKET_SIZE - stored_payload_offset;
+  if (max_copy_size > max_stored_access)
+    max_copy_size = max_stored_access;
+
+  // Additional safety: cap at reasonable limit
+  if (max_copy_size > 1400)
+    max_copy_size = 1400;
+
+  __u8 *dst_payload = (__u8 *)current_payload;
+
+// Safe payload copy with strict bounds checking
+#pragma unroll
+  for (int i = 0; i < 1400; i++) { // Reduced from 1472 to 1400 for safety
+    // Multiple bounds checks to satisfy verifier
+    if (i >= max_copy_size)
+      break;
+    if ((void *)(dst_payload + i + 1) > data_end)
+      break;
+
+    // Critical: Ensure array access is within bounds
+    __u32 src_index = stored_payload_offset + i;
+    if (src_index >= MAX_PACKET_SIZE)
+      break;
+    if (src_index >= stored_pkt->len)
+      break;
+
+    // This access is now proven safe to the verifier
+    dst_payload[i] = stored_pkt->data[src_index];
+  }
+
+  return XDP_PASS;
+}
+
 SEC("xdp")
 int xdp_prog(struct xdp_md *ctx) {
   void *data = (void *)(long)ctx->data;
@@ -418,7 +574,83 @@ int xdp_prog(struct xdp_md *ctx) {
                       .protocol = iph->protocol};
 
   if (iph->saddr == 0 && iph->daddr == 0) {
-    bpf_printk("found a blanch packet");
+
+    // __u32 vals[4] = {0, 0, 0, 0};
+    void *payload = (void *)udph + sizeof(*udph);
+
+    /* we want first 4 * 32-bit integers => 4 * 4 = 16 bytes */
+    const int num_ints = 4;
+    const int needed = num_ints * sizeof(__u32);
+    if (payload + needed > data_end)
+      return XDP_PASS; /* not enough payload */
+
+    __u32 vals_net[num_ints] = {0, 0, 0, 0};
+#pragma unroll
+    for (int i = 0; i < num_ints; i++) {
+      __builtin_memcpy(&vals_net[i], payload + i * sizeof(__u32),
+                       sizeof(__u32));
+    }
+
+    __u32 vals_host[num_ints];
+#pragma unroll
+    for (int i = 0; i < num_ints; i++) {
+      vals_host[i] = bpf_ntohl(vals_net[i]); /* same as ntohl */
+    }
+
+    /* Example: debug output (remove or replace in production) */
+    bpf_printk("udp first4: %u %u %u %u\n", vals_host[0], vals_host[1],
+               vals_host[2], vals_host[3]);
+    int res = copy_with_stored_packet(ctx, vals_host);
+    bpf_printk("res: %d", res);
+    if (res == XDP_PASS) {
+      // // void *payload = l4_hdr + sizeof(udph);
+      // // if (payload + sizeof(__u32) <= data_end) {
+      // //   __u32 netval = *(__u32 *)payload;
+      // //   __u32 val = bpf_ntohl(netval);
+      // //   bpf_printk("PAYLOAD INT: %u", val);
+      // //   if (val == 2) {
+      // //     bpf_printk("MATCH: first payload int == 2");
+      // //     // return XDP_TX;
+      // //   }
+      // // }
+
+      bpf_printk("XDP: Processing packet, eth_proto=0x%x",
+                 bpf_ntohs(eth->h_proto));
+      bpf_printk("ETH: src=%02x:%02x:%02x:%02x:%02x:%02x "
+                 "dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
+                 eth->h_source[0], eth->h_source[1], eth->h_source[2],
+                 eth->h_source[3], eth->h_source[4], eth->h_source[5],
+                 eth->h_dest[0], eth->h_dest[1], eth->h_dest[2], eth->h_dest[3],
+                 eth->h_dest[4], eth->h_dest[5]);
+      __u32 saddr = iph->saddr;
+      __u32 daddr = iph->daddr;
+      __sum16 check = iph->check;
+      __be16 id = iph->id;
+      __be16 frag_off = iph->frag_off;
+      __sum16 check_udp = udph->check;
+      bpf_printk("IP: src=%d.%d.%d.%d dst=%d.%d.%d.%d proto=%d ttl=%d\n",
+                 ((unsigned char *)&saddr)[0], ((unsigned char *)&saddr)[1],
+                 ((unsigned char *)&saddr)[2], ((unsigned char *)&saddr)[3],
+                 ((unsigned char *)&daddr)[0], ((unsigned char *)&daddr)[1],
+                 ((unsigned char *)&daddr)[2], ((unsigned char *)&daddr)[3],
+                 iph->protocol, iph->ttl);
+      bpf_printk("IP checksum: 0x%04x\n", __builtin_bswap16(check));
+      bpf_printk("IP ID: %u, Fragment offset + flags: 0x%x\n", id, frag_off);
+      bpf_printk("UDP: sport=%d dport=%d len=%d\n", bpf_ntohs(udph->source),
+                 bpf_ntohs(udph->dest), bpf_ntohs(udph->len));
+      bpf_printk("UDP checksum: 0x%04x\n", __builtin_bswap16(check_udp));
+      bpf_printk("XDP: IP packet, protocol=%d", iph->protocol);
+
+      // // udph->dest = bpf_htons(5000);
+
+      // // bpf_printk("XDP: IP packet, %d->%d", iph->saddr, iph->daddr);
+
+      // // bpf_printk("XDP: UDP packet %d->%d", bpf_ntohs(udph->source),
+      // //            bpf_ntohs(udph->dest));
+      // // bpf_printk("XDP: MPI packet found %d->%d", value->src_procc,
+      // //            value->dst_procc);
+      return XDP_PASS;
+    }
   }
 
   tuple_process *value = bpf_map_lookup_elem(&mpi_sockets_map, &pkt_id);
@@ -510,9 +742,9 @@ int xdp_prog(struct xdp_md *ctx) {
     } else {
       bpf_printk("XDP: Packet queued for process %d\n", value->dst_procc);
     }
-    // if (store_full_packet(ctx, 1) < 0) {
-    //   bpf_printk("Failed to store MPI packet\n");
-    // }
+    if (store_full_packet(ctx, 1) < 0) {
+      bpf_printk("Failed to store MPI packet\n");
+    }
     // bpf_printk("==============\n");
     // process_stored_packets();
     // if (process_stored_packets() < 0) {
@@ -526,7 +758,8 @@ int xdp_prog(struct xdp_md *ctx) {
   // }
 
   // __u32 key = 0;
-  // struct full_packet *pkt = bpf_map_lookup_elem(&temp_packet_storage, &key);
+  // struct full_packet *pkt = bpf_map_lookup_elem(&temp_packet_storage,
+  // &key);
 
   return XDP_PASS;
 }

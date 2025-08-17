@@ -27,6 +27,15 @@ typedef enum MPI_Datatype {
   MPI_WCHAR
 } MPI_Datatype;
 
+typedef enum MPI_Opcode {
+  MPI_BCAST,
+  MPI_REDUCE,
+  MPI_SHATTER,
+  MPI_GATHER,
+  MPI_SHATTERV,
+  MPI_GATHERV
+} MPI_Opcode;
+
 typedef struct MPI_process_info {
   int rank;
   int *socket_fd;
