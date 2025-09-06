@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <linux/if_link.h>
+#include <xdp/xsk.h>
 
 #define MPI_ANY_TAG 0
 #define MPI_TAG_UB 32179
@@ -75,6 +76,8 @@ typedef struct EBPF_info {
   int queue_map_fd;
   int head_map_fd;
   int tail_map_fd;
+  int temp_packet_storage_fd;
+  int mpi_packet_queue_fd;
 } EBPF_info;
 
 typedef struct packet_info {
@@ -91,3 +94,17 @@ typedef struct inject_packet {
   __u32 packet_len;       // Length of the packet
   __u8 packet_data[1500]; // Packet data (max MTU)
 } inject_packet;
+
+struct xsk_umem_info {
+  void *umem_area;
+  struct xsk_ring_prod fq; // Fill queue
+  struct xsk_ring_cons cq; // Completion queue
+  struct xsk_umem *umem;
+};
+
+struct xsk_socket_info {
+  struct xsk_socket *xsk;
+  struct xsk_ring_cons rx; // RX ring
+  struct xsk_ring_prod tx; // TX ring
+  struct xsk_umem_info *umem;
+};
