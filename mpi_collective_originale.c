@@ -35,7 +35,7 @@ int create_server_socket(int port) {
 int connect_to_peer(int peer_rank, int my_rank) {
   int socket_fd;
   struct sockaddr_in addr;
-  char ip[] = "127.0.0.1";
+  char ip[] = "192.168.101.2";
   int port = BASE_PORT + peer_rank;
   socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 

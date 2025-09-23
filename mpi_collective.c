@@ -21,7 +21,7 @@ int extract_5tuple(int sockfd, struct socket_id *id) {
 
   // For UDP monitoring, we want to capture both send and receive patterns
   // Set dst_ip to localhost since all communication is local
-  inet_pton(AF_INET, "127.0.0.1", &id->dst_ip);
+  inet_pton(AF_INET, "192.168.101.2", &id->dst_ip);
   id->dst_port = 0; // Will be filled when we know the peer
 
   return 0;
@@ -52,7 +52,7 @@ int create_udp_socket(int port) {
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  // addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  // addr.sin_addr.s_addr = inet_addr("192.168.101.2");
 
   if (bind(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     perror("bind failed\n");
@@ -93,7 +93,7 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
     peer_addrs[i].sin_family = AF_INET;
     peer_addrs[i].sin_port = htons(BASE_PORT + i);
-    inet_pton(AF_INET, "127.0.0.1", &peer_addrs[i].sin_addr);
+    inet_pton(AF_INET, "192.168.101.2", &peer_addrs[i].sin_addr);
   }
 
   // Update BPF map with socket information for each potential communication
@@ -106,8 +106,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
       // Entry for outgoing traffic (this process -> peer)
       socket_id out_socket_map;
-      out_socket_map.src_ip = inet_addr("127.0.0.1");
-      out_socket_map.dst_ip = inet_addr("127.0.0.1");
+      out_socket_map.src_ip = inet_addr("192.168.101.2");
+      out_socket_map.dst_ip = inet_addr("192.168.101.2");
       out_socket_map.src_port = BASE_PORT + rank;
       out_socket_map.dst_port = BASE_PORT + peer;
       out_socket_map.protocol = IPPROTO_UDP;
@@ -125,8 +125,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
       // Entry for incoming traffic (peer -> this process)
       socket_id in_socket_map;
-      in_socket_map.src_ip = inet_addr("127.0.0.1");
-      in_socket_map.dst_ip = inet_addr("127.0.0.1");
+      in_socket_map.src_ip = inet_addr("192.168.101.2");
+      in_socket_map.dst_ip = inet_addr("192.168.101.2");
       in_socket_map.src_port = BASE_PORT + peer;
       in_socket_map.dst_port = BASE_PORT + rank;
       in_socket_map.protocol = IPPROTO_UDP;
@@ -149,8 +149,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
       // Entry for outgoing traffic (this process -> peer)
       socket_id out_socket_map;
-      out_socket_map.src_ip = inet_addr("127.0.0.1");
-      out_socket_map.dst_ip = inet_addr("127.0.0.1");
+      out_socket_map.src_ip = inet_addr("192.168.101.2");
+      out_socket_map.dst_ip = inet_addr("192.168.101.2");
       out_socket_map.src_port = BASE_PORT + rank;
       out_socket_map.dst_port = BASE_PORT + peer;
       out_socket_map.protocol = IPPROTO_UDP;
@@ -168,8 +168,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
       // Entry for incoming traffic (peer -> this process)
       socket_id in_socket_map;
-      in_socket_map.src_ip = inet_addr("127.0.0.1");
-      in_socket_map.dst_ip = inet_addr("127.0.0.1");
+      in_socket_map.src_ip = inet_addr("192.168.101.2");
+      in_socket_map.dst_ip = inet_addr("192.168.101.2");
       in_socket_map.src_port = BASE_PORT + peer;
       in_socket_map.dst_port = BASE_PORT + rank;
       in_socket_map.protocol = IPPROTO_UDP;
@@ -1161,17 +1161,21 @@ int mpi_send_raw(const void *buf, int count, MPI_Datatype datatype, int dest,
   }
 
   // Extract MAC addresses from the packet_info value parameter
-  // uint8_t dst_mac[ETH_ALEN];
-  uint8_t dst_mac[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-  // uint8_t src_mac[ETH_ALEN];
-  uint8_t src_mac[ETH_ALEN] = {0xbc, 0x0f, 0xf3, 0x5f, 0x87, 0xba};
+  // Assuming you want to swap source and destination MAC addresses
+  uint8_t dst_mac[ETH_ALEN];
+  uint8_t src_mac[ETH_ALEN];
 
+  // Extract MAC addresses from ethernet header in packet_info
   // Copy source MAC from packet_info as destination MAC for our packet
-  memcpy(dst_mac, &value->eth_hdr[6],
-         ETH_ALEN); // Source MAC from received packet
-  // Copy destination MAC from packet_info as source MAC for our packet
-  memcpy(src_mac, &value->eth_hdr[0],
-         ETH_ALEN); // Dest MAC from received packet
+  // memcpy(dst_mac, &value->eth_hdr[6],
+  //        ETH_ALEN); // Source MAC from received packet
+  // memset(dst_mac, 0xff,
+  //        ETH_ALEN); // Source MAC from received packet
+  // // Copy destination MAC from packet_info as source MAC for our packet
+  // memcpy(src_mac, &value->eth_hdr[0],
+  //        ETH_ALEN); // Dest MAC from received packet
+  // memset(src_mac, 0x00,
+  //        ETH_ALEN); // Dest MAC from received packet
 
   // Build the complete packet
   size_t eth_hdr_len = sizeof(struct ether_header);
@@ -1188,8 +1192,6 @@ int mpi_send_raw(const void *buf, int count, MPI_Datatype datatype, int dest,
 
   // 1) Ethernet header
   struct ether_header *eth = (struct ether_header *)packet;
-  memcpy(eth->ether_dhost, dst_mac, ETH_ALEN); // Use extracted dest MAC
-  memcpy(eth->ether_shost, src_mac, ETH_ALEN); // Use extracted source MAC
   eth->ether_type = htons(ETHERTYPE_IP);
 
   // 2) IPv4 header
@@ -1202,8 +1204,41 @@ int mpi_send_raw(const void *buf, int count, MPI_Datatype datatype, int dest,
   ip->frag_off = htons(0x4000); // DF set
   ip->ttl = 64;
   ip->protocol = IPPROTO_UDP;
+  // if (socket_info.src_ip == 16777343) {
+
+  //   ip->saddr = 0; // use socket info from bpf map
+  // } else {
+  //   ip->saddr = socket_info.src_ip; // Use socket info from BPF map
+  // }
+  // if (socket_info.dst_ip == 16777343) {
+
+  //   ip->daddr = 0; // use socket info from bpf map
+  // } else {
+  //   ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
+  // }
   ip->saddr = socket_info.src_ip; // Use socket info from BPF map
   ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
+  if (socket_info.src_ip == socket_info.dst_ip) {
+
+    ip->saddr = 0; // use socket info from bpf map
+    ip->daddr = 0; // use socket info from bpf map
+    // ip->saddr = socket_info.src_ip; // Use socket info from BPF map
+    // ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
+    memcpy(dst_mac, &value->eth_hdr[0],
+           ETH_ALEN); // Source MAC from received packet
+    memcpy(src_mac, &value->eth_hdr[6],
+           ETH_ALEN); // Dest MAC from received packet
+  } else {
+    // ip->saddr = socket_info.src_ip; // Use socket info from BPF map
+    // ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
+    tag = -1 * tag;
+    memcpy(dst_mac, &value->eth_hdr[0],
+           ETH_ALEN); // Source MAC from received packet
+    memcpy(src_mac, &value->eth_hdr[6],
+           ETH_ALEN); // Dest MAC from received packet
+  }
+  memcpy(eth->ether_dhost, dst_mac, ETH_ALEN); // Use extracted dest MAC
+  memcpy(eth->ether_shost, src_mac, ETH_ALEN); // Use extracted source MAC
   ip->check = 0;
   ip->check = ip_checksum(ip, ip_hdr_len);
 
@@ -1213,8 +1248,6 @@ int mpi_send_raw(const void *buf, int count, MPI_Datatype datatype, int dest,
   udp->dest = htons(socket_info.dst_port);
   udp->len = htons(udp_hdr_len + payload_size);
   udp->check = 0; // UDP checksum is optional for IPv4
-  // udp->check = udp_checksum(
-  //     udp, udp_hdr_len + payload_size);
 
   // 4) Copy MPI payload (tag + data)
   memcpy(packet + eth_hdr_len + ip_hdr_len + udp_hdr_len, message,
@@ -1519,8 +1552,8 @@ int mpi_send_xdp(const void *buf, int count, MPI_Datatype datatype, int dest,
   ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
   if (socket_info.src_ip == socket_info.dst_ip) {
 
-    // ip->saddr = 0; // use socket info from bpf map
-    // ip->daddr = 0; // use socket info from bpf map
+    ip->saddr = 0; // use socket info from bpf map
+    ip->daddr = 0; // use socket info from bpf map
     // ip->saddr = socket_info.src_ip; // Use socket info from BPF map
     // ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
     memcpy(dst_mac, &value->eth_hdr[0],
@@ -1742,7 +1775,7 @@ int mpi_bcast_ring(void *buf, int count, MPI_Datatype datatype, int root) {
       // if you want XDP‐send for everyone, swap these two calls
     } else {
       mpi_send_xdp(buf, count, datatype, next, tag, &recv_info);
-      // mpi_send(buf, count, datatype, next, 2);
+      // mpi_send(buf, count, datatype, next, tag);
     }
   }
 
@@ -1763,7 +1796,7 @@ int mpi_bcast_ring_raw(void *buf, int count, MPI_Datatype datatype, int root) {
     printf("Process %d (root) sending to %d\n", rank, next);
     mpi_send(buf, count, datatype, next, tag);
     // usleep(100000); // 100ms delay
-    sleep(2);
+    // sleep(2);
   }
 
   // 2) Everyone except root must receive from their predecessor
@@ -1775,9 +1808,9 @@ int mpi_bcast_ring_raw(void *buf, int count, MPI_Datatype datatype, int root) {
     }
 
     // (Optional) pull off XDP metadata if you’re using that path:
-    // if (queue_dequeue(rank, &recv_info) == 0) {
-    //   // … inspect recv_info …
-    // }
+    if (queue_dequeue(rank, &recv_info) == 0) {
+      // … inspect recv_info …
+    }
   }
 
   // 3) And everyone except the predecessor of root forwards to their “next”
@@ -1788,9 +1821,10 @@ int mpi_bcast_ring_raw(void *buf, int count, MPI_Datatype datatype, int root) {
       // root already used mpi_send above;
       // if you want XDP‐send for everyone, swap these two calls
     } else {
-      mpi_send_raw_blanch_v2(next, MPI_BCAST, datatype, tag);
+      mpi_send_raw(buf, count, datatype, next, 2, &recv_info);
+      // mpi_send_raw_blanch_v2(next, MPI_BCAST, datatype, tag);
       // usleep(100000); // 100ms delay
-      sleep(2);
+      // sleep(2);
       // mpi_send_xdp(buf, count, datatype, next, 2, &recv_info);
       // mpi_send(buf, count, datatype, next, 2);
     }

@@ -1,0 +1,1 @@
+savedcmd_/home/marco/XDP-MPI-Collectives/kernel_module/Module.symvers :=  scripts/mod/modpost -M -m -a      -o /home/marco/XDP-MPI-Collectives/kernel_module/Module.symvers -T /home/marco/XDP-MPI-Collectives/kernel_module/modules.order -i Module.symvers -e 

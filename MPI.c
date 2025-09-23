@@ -60,7 +60,7 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
 
-  err = ebpf_loader_attach_by_index(&loader, 2);
+  err = ebpf_loader_attach_by_name(&loader, "enp52s0f1np1");
   if (err != 0) {
     perror("loader attach fail\n");
     exit(EXIT_FAILURE);
@@ -176,7 +176,7 @@ int main(int argc, char *argv[]) {
 
   while (wait(NULL) > 0)
     ;
-  // pause();
+  pause();
   ebpf_loader_cleanup(&loader);
   return EXIT_SUCCESS;
 }

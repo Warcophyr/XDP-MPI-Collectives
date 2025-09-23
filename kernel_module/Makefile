@@ -1,22 +1,3 @@
-TARGETS := kfunc
-
-.PHONY : all clean
-
-all: clean $(TARGETS)
-
-$(TARGETS):
-	clang -g -O2 --target=bpf -c $@.bpf.c -o $@.bpf.o -I ./kernel_module
-	bpftool gen skeleton $@.bpf.o > $@.bpf.skel.h
-	gcc -g -O2 -o $@ $@.c -lbpf
-
-clean:
-	rm -f $(TARGETS) $(TARGETS:=.bpf.o) $(TARGETS:=.bpf.skel.h)
-
-
-
-
-
-
 # CLANG        := clang
 # GCC          := gcc
 # KFLAGS       := -O2 -g -target bpf
@@ -34,7 +15,7 @@ clean:
 
 
 # $(KOBJ): xdp_prog_kern.c
-# 	$(CLANG) $(KFLAGS) -c $< -o $@ -I ../XDP-MPI-Collectives/kernel_module
+# 	$(CLANG) $(KFLAGS) -c $< -o $@
 
 # $(KMAP): xdp_map_mpi.c
 # 	$(CLANG) $(KFLAGS) -c $< -o $@
@@ -45,6 +26,23 @@ clean:
 # $(MPI): MPI.c 
 # 	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
 
+# $(KERNELMODULE): kernel_module_xdp.c
+# 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
-# clean:
+obj-m += kernel_module_xdp.o
+# KBUILD_CFLAGS += -g -O2
+all: 
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+
+load:
+	sudo insmod kernel_module_xdp.ko 
+
+unload:
+	sudo rmmod kernel_module_xdp
+
+ls: 
+	sudo lsmod | grep kernel_module_xdp
+
+clean:
 # 	rm -f $(KOBJ) $(ULOADER)
+	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean

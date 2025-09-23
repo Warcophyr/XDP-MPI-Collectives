@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../mellanox-out-of-tree"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"module.h": "c",
+			"fs.h": "c"
+		}
+	}
+}
