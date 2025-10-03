@@ -257,9 +257,9 @@ int main(int argc, char *argv[]) {
       // }
       fflush(stdout);
       // mpi_bcast_ring(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
-      // mpi_bcast_ring_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
+      mpi_bcast_ring_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
       // // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
-      mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
+      // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
       // mpi_reduce_ring(&x, sizeof(x) / sizeof(int), MPI_INT, MPI_SUM, 1);
       // mpi_bcast_ring_raw(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
       // mpi_barrier();
@@ -269,31 +269,31 @@ int main(int argc, char *argv[]) {
       // if (MPI_PROCESS->rank == 0) {
       //   printf("end: %lf\n", ttotalend);
       // }
-      // for (int i = 0; i < WORD_SIZE; i++) {
-      //   wait(NULL); // wait for each child to finish
-      // }
-      // for (size_t r = 0; r < WORD_SIZE; r++) {
-      //   // mpi_barrier_ring();
-      //   if (MPI_PROCESS->rank == r) {
-      //     printf("Rank: %d: \n", MPI_PROCESS->rank);
-      //     for (size_t i = 0; i < (sizeof(y) / sizeof(char)) - 1; i++) {
-      //       printf("%c ", y[i]);
-      //     }
-      //     printf("\n");
-      //     fflush(stdout);
-      //   }
-      //   // mpi_barrier_ring();
-      // }
-      // mpi_barrier_ring();
+      for (int i = 0; i < WORD_SIZE; i++) {
+        wait(NULL); // wait for each child to finish
+      }
       for (size_t r = 0; r < WORD_SIZE; r++) {
         // mpi_barrier_ring();
         if (MPI_PROCESS->rank == r) {
-          printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
+          printf("Rank: %d: \n", MPI_PROCESS->rank);
+          for (size_t i = 0; i < (sizeof(x) / sizeof(int)) - 1; i++) {
+            printf("%d ", x[i]);
+          }
           printf("\n");
           fflush(stdout);
         }
         // mpi_barrier_ring();
       }
+      // mpi_barrier_ring();
+      // for (size_t r = 0; r < WORD_SIZE; r++) {
+      //   // mpi_barrier_ring();
+      //   if (MPI_PROCESS->rank == r) {
+      //     printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
+      //     printf("\n");
+      //     fflush(stdout);
+      //   }
+      //   // mpi_barrier_ring();
+      // }
       // if (MPI_PROCESS->rank == 0) {
       //   printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
       //   printf("\n");
