@@ -27,14 +27,14 @@ typedef enum MPI_Datatype {
   MPI_WCHAR
 } MPI_Datatype;
 
-typedef enum MPI_Opcode {
+typedef enum MPI_Collective {
   MPI_BCAST,
   MPI_REDUCE,
   MPI_SHATTER,
   MPI_GATHER,
   MPI_SHATTERV,
   MPI_GATHERV
-} MPI_Opcode;
+} MPI_Collective;
 
 // Map definition
 

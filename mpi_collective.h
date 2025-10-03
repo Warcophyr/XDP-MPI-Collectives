@@ -1,5 +1,6 @@
 #pragma once
 #define _GNU_SOURCE
+#include <math.h>
 #include <alloca.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -45,12 +46,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
                            int mpi_send_map_fd);
 int datatype_size_in_bytes(int count, MPI_Datatype datatype);
 void print_mpi_message(void *buf, int length, MPI_Datatype datatype);
-static int queue_enqueue(__u32 qid, packet_info val);
-static int queue_dequeue(__u32 qid, packet_info *out);
 int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
              int tag);
-int mpi_send_xdp(const void *buf, int count, MPI_Datatype datatype, int dest,
-                 int tag, packet_info *value);
 int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag);
 
 int mpi_barrier(void);

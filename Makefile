@@ -1,36 +1,21 @@
-TARGETS := kfunc
-
-.PHONY : all clean
-
-all: clean $(TARGETS)
-
-$(TARGETS):
-	clang -g -O2 --target=bpf -c $@.bpf.c -o $@.bpf.o -I ./kernel_module
-	bpftool gen skeleton $@.bpf.o > $@.bpf.skel.h
-	gcc -g -O2 -o $@ $@.c -lbpf
-
-clean:
-	rm -f $(TARGETS) $(TARGETS:=.bpf.o) $(TARGETS:=.bpf.skel.h)
-
-
-
-
-
-
-# CLANG        := clang
-# GCC          := gcc
+CLANG        := clang
+GCC          := gcc
 # KFLAGS       := -O2 -g -target bpf
-# UFLAGS       := -O2 -Wall
-# LIBS         := -lbpf -lelf -lz -lxdp -lm
+UFLAGS       := -O3 -Wall 
+GDB          := -g -O1 -fsanitize=address -fno-omit-frame-pointer
+LIBS         := -lbpf -lelf -lz -lxdp -lm
 
 # KOBJ         := xdp_prog_kern.o
 # KMAP         := xdp_map_mpi.o
 # ULOADER      := xdp_loader
 # MPI     	 := MPI
 # KERNELMODULE := kernel_module_xdp.ko
+TARGETS := kfunc.c kfunc.bpf.c
+
+.PHONY : all clean
 
 
-# all: $(KOBJ) $(ULOADER) $(MPI) $(KMAP)
+all: $(TARGETS) 
 
 
 # $(KOBJ): xdp_prog_kern.c
@@ -45,6 +30,18 @@ clean:
 # $(MPI): MPI.c 
 # 	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
 
+MPI: ./MPI.c
+	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
 
-# clean:
+kfunc: $(TARGETS)
+	clang -g -O2 --target=bpf -c $@.bpf.c -o $@.bpf.o -I ./kernel_module
+	bpftool gen skeleton $@.bpf.o > $@.bpf.skel.h
+	gcc -g -O2 -o $@ $@.c -lbpf
+
+run:
+	sudo ./MPI -n 4 -i enp52s0f1np1
+
+clean:
+	rm -f MPI
 # 	rm -f $(KOBJ) $(ULOADER)
+	rm -f $(TARGETS) $(TARGETS:=.bpf.o) $(TARGETS:=.bpf.skel.h)

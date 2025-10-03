@@ -7,8 +7,11 @@
 #include <linux/if_link.h>
 #include <xdp/xsk.h>
 
-#define MPI_ANY_TAG 0
-#define MPI_TAG_UB 32179
+typedef struct Array {
+  void *arr;
+  size_t len;
+} Array;
+
 typedef enum MPI_Datatype {
   MPI_CHAR,
   MPI_SIGNED_CHAR,
@@ -28,18 +31,36 @@ typedef enum MPI_Datatype {
   MPI_WCHAR
 } MPI_Datatype;
 
-typedef enum MPI_Opcode {
+typedef enum MPI_Collective {
+  MPI_SEND,
   MPI_BCAST,
   MPI_REDUCE,
   MPI_SHATTER,
   MPI_GATHER,
   MPI_SHATTERV,
   MPI_GATHERV
+} MPI_Collective;
+
+typedef enum MPI_Opcode {
+  MPI_SUM,
+  MPI_PROD,
+  MPI_MAX,
+  MPI_MIN,
+  MPI_LAND,
+  MPI_LOR,
+  MPI_LXOR,
+  MPI_BAND,
+  MPI_BOR,
+  MPI_BXOR,
+  MPI_MAXLOC,
+  MPI_MINLOC,
+  MPI_REPLACE
 } MPI_Opcode;
 
 typedef struct MPI_process_info {
   int rank;
   int *socket_fd;
+  int *socket_barrier_fd;
 } MPI_process_info;
 
 typedef struct socket_id {
@@ -70,41 +91,7 @@ struct sockaddr_info {
 
 typedef struct EBPF_info {
   ebpf_loader *loader;
-  int mpi_sockets_map_fd;
-  int info_packet_arr_fd;
-  int mpi_send_map_fd;
-  int queue_map_fd;
-  int head_map_fd;
-  int tail_map_fd;
-  int temp_packet_storage_fd;
-  int mpi_packet_queue_fd;
+  int address_to_proc;
+  int proc_to_address;
+  int num_process;
 } EBPF_info;
-
-typedef struct packet_info {
-  __u32 ingress_ifindex;
-  __u8 eth_hdr[14]; // Ethernet header
-  __u8 ip_hdr[20];  // IPv4 header (no options)
-  __u8 udp_hdr[8];  // UDP header
-  __u32 total_len;  // e.g. ntohs(ip->tot_len)
-                    // … you can add seq numbers, timestamps, etc.
-} packet_info;
-
-typedef struct inject_packet {
-  __u32 target_ifindex;   // Interface to inject to
-  __u32 packet_len;       // Length of the packet
-  __u8 packet_data[1500]; // Packet data (max MTU)
-} inject_packet;
-
-struct xsk_umem_info {
-  void *umem_area;
-  struct xsk_ring_prod fq; // Fill queue
-  struct xsk_ring_cons cq; // Completion queue
-  struct xsk_umem *umem;
-};
-
-struct xsk_socket_info {
-  struct xsk_socket *xsk;
-  struct xsk_ring_cons rx; // RX ring
-  struct xsk_ring_prod tx; // TX ring
-  struct xsk_umem_info *umem;
-};

@@ -3,16 +3,19 @@
 #include "mpi_struct.h"
 #include <xdp/xsk.h>
 
+#define MPI_ANY_SOURCE -2
+#define MPI_ANY_TAG -1
+#define MPI_TAG_UB 32179
+
+#define PORT 5000
+#define BUFFER_SIZE 1024
+#define MAESTRALE_IP "192.168.101.2"
+#define GRECALE_IP "192.168.101.1"
+
 #define MPI_GLOVAL_VAR
 #define BASE_PORT 5000
+#define BARRIER_PORT 10000
 #define MAX_MESSAGE_SIZE 1024
 
 EBPF_info EBPF_INFO = {0};
 struct ebpf_loader loader = {0};
-
-#define QUEUE_SIZE 128
-#define QUEUE_MASK (QUEUE_SIZE - 1)
-
-#define NUM_FRAMES 4096
-#define FRAME_SIZE 2048
-#define UMEM_SIZE (NUM_FRAMES * FRAME_SIZE)

@@ -5,6 +5,7 @@ MPI_process_info *MPI_PROCESS = NULL;
 // Global peer address table
 struct sockaddr_in *peer_addrs = NULL;
 int udp_socket_fd = -1;
+int udp_socket_barrier_fd = -1;
 
 int extract_5tuple(int sockfd, struct socket_id *id) {
   struct sockaddr_in local_addr;
@@ -74,12 +75,25 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
   // Create UDP socket for this process
   udp_socket_fd = create_udp_socket(BASE_PORT + rank);
+  udp_socket_barrier_fd = create_udp_socket(BARRIER_PORT + rank);
 
   // Store the single UDP socket - maintaining compatibility with existing
   // structure
   mpi_process_info->socket_fd = (int *)malloc(WORD_SIZE * sizeof(int));
+  if (mpi_process_info->socket_fd == NULL) {
+    perror("malloc skoket_fd fail\n");
+    exit(EXIT_FAILURE);
+  }
   memset(mpi_process_info->socket_fd, -1, WORD_SIZE * sizeof(int));
   mpi_process_info->socket_fd[0] = udp_socket_fd; // Store UDP socket at index 0
+  mpi_process_info->socket_barrier_fd = (int *)malloc(WORD_SIZE * sizeof(int));
+  if (mpi_process_info->socket_barrier_fd == NULL) {
+    perror("malloc skoket_fd fail\n");
+    exit(EXIT_FAILURE);
+  }
+  memset(mpi_process_info->socket_barrier_fd, -1, WORD_SIZE * sizeof(int));
+  mpi_process_info->socket_barrier_fd[0] =
+      udp_socket_barrier_fd; // Store UDP socket at index 0
 
   // Create peer address table for UDP communication
   peer_addrs =
@@ -93,7 +107,7 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
     peer_addrs[i].sin_family = AF_INET;
     peer_addrs[i].sin_port = htons(BASE_PORT + i);
-    inet_pton(AF_INET, "192.168.101.2", &peer_addrs[i].sin_addr);
+    inet_pton(AF_INET, GRECALE_IP, &peer_addrs[i].sin_addr);
   }
 
   // Update BPF map with socket information for each potential communication
@@ -106,8 +120,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
       // Entry for outgoing traffic (this process -> peer)
       socket_id out_socket_map;
-      out_socket_map.src_ip = inet_addr("192.168.101.2");
-      out_socket_map.dst_ip = inet_addr("192.168.101.2");
+      out_socket_map.src_ip = inet_addr(MAESTRALE_IP);
+      out_socket_map.dst_ip = inet_addr(GRECALE_IP);
       out_socket_map.src_port = BASE_PORT + rank;
       out_socket_map.dst_port = BASE_PORT + peer;
       out_socket_map.protocol = IPPROTO_UDP;
@@ -125,8 +139,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
       // Entry for incoming traffic (peer -> this process)
       socket_id in_socket_map;
-      in_socket_map.src_ip = inet_addr("192.168.101.2");
-      in_socket_map.dst_ip = inet_addr("192.168.101.2");
+      in_socket_map.src_ip = inet_addr(MAESTRALE_IP);
+      in_socket_map.dst_ip = inet_addr(GRECALE_IP);
       in_socket_map.src_port = BASE_PORT + peer;
       in_socket_map.dst_port = BASE_PORT + rank;
       in_socket_map.protocol = IPPROTO_UDP;
@@ -149,8 +163,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
       // Entry for outgoing traffic (this process -> peer)
       socket_id out_socket_map;
-      out_socket_map.src_ip = inet_addr("192.168.101.2");
-      out_socket_map.dst_ip = inet_addr("192.168.101.2");
+      out_socket_map.src_ip = inet_addr(MAESTRALE_IP);
+      out_socket_map.dst_ip = inet_addr(GRECALE_IP);
       out_socket_map.src_port = BASE_PORT + rank;
       out_socket_map.dst_port = BASE_PORT + peer;
       out_socket_map.protocol = IPPROTO_UDP;
@@ -168,8 +182,8 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
       // Entry for incoming traffic (peer -> this process)
       socket_id in_socket_map;
-      in_socket_map.src_ip = inet_addr("192.168.101.2");
-      in_socket_map.dst_ip = inet_addr("192.168.101.2");
+      in_socket_map.src_ip = inet_addr(MAESTRALE_IP);
+      in_socket_map.dst_ip = inet_addr(GRECALE_IP);
       in_socket_map.src_port = BASE_PORT + peer;
       in_socket_map.dst_port = BASE_PORT + rank;
       in_socket_map.protocol = IPPROTO_UDP;
@@ -247,27 +261,131 @@ int datatype_size_in_bytes(int count, MPI_Datatype datatype) {
   return res;
 }
 
-int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
-             int tag) {
+int bytes_size_in_unit(int count, MPI_Datatype datatype) {
+  int res = -1;
+  switch (datatype) {
+  case MPI_CHAR:
+    res = count / sizeof(char);
+    break;
+  case MPI_SIGNED_CHAR:
+    res = count / sizeof(signed char);
+    break;
+  case MPI_UNSIGNED_CHAR:
+    res = count / sizeof(unsigned char);
+    break;
+  case MPI_SHORT:
+    res = count / sizeof(short);
+    break;
+  case MPI_UNSIGNED_SHORT:
+    res = count / sizeof(unsigned short);
+    break;
+  case MPI_INT:
+    res = count / sizeof(int);
+    break;
+  case MPI_UNSIGNED:
+    res = count / sizeof(unsigned);
+    break;
+  case MPI_LONG:
+    res = count / sizeof(long);
+    break;
+  case MPI_UNSIGNED_LONG:
+    res = count / sizeof(unsigned long);
+    break;
+  case MPI_LONG_LONG:
+    res = count / sizeof(long long);
+    break;
+  case MPI_UNSIGNED_LONG_LONG:
+    res = count / sizeof(unsigned long long);
+    break;
+  case MPI_FLOAT:
+    res = count / sizeof(float);
+    break;
+  case MPI_DOUBLE:
+    res = count / sizeof(double);
+    break;
+  case MPI_LONG_DOUBLE:
+    res = count / sizeof(long double);
+    break;
+  case MPI_C_BOOL:
+    res = count / sizeof(bool);
+    break;
+  case MPI_WCHAR:
+    res = count / sizeof(wchar_t);
+    break;
+  default:
+    break;
+  }
+  return res;
+}
+
+static int __mpi_send_barrier(const void *buf, int count, MPI_Datatype datatype,
+                              int root, int dest, int tag,
+                              MPI_Collective collective) {
   int size = datatype_size_in_bytes(count, datatype);
   if (size < 1) {
     return -1;
   }
 
   // Create message with tag header
-  int total_size = sizeof(int) + size;
+  int total_size = (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2) + sizeof(unsigned long) + sizeof(int) +
+                   size;
+  // printf("total size %d\n", total_size);
+
+  unsigned long seq = 0;
+
   void *message = malloc(total_size);
   if (!message) {
     perror("malloc failed");
     return -1;
   }
+  char header_mpi[4] = {'M', 'P', 'I', '\0'};
+  void *header_mpi_send = message;
+  generic_hton(header_mpi_send, header_mpi, sizeof(char), 4);
+  // printf("%s\n", message);
+
+  void *root_send = (char *)message + (sizeof(char) * 4);
+  generic_hton(root_send, &root, sizeof(int), 1);
+
+  void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
+  generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
+
+  void *dst_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+  generic_hton(dst_send, &dest, sizeof(int), 1);
+
+  void *opcode_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+  generic_hton(opcode_send, &collective, sizeof(MPI_Collective), 1);
+
+  void *datatype_send = (char *)message + (sizeof(char) * 4) +
+                        (sizeof(int) * 3) + sizeof(MPI_Collective);
+  generic_hton(datatype_send, &datatype, sizeof(MPI_Datatype), 1);
+
+  void *len_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+  generic_hton(len_send, &count, sizeof(int), 1);
 
   // Add tag to message header
-  void *tag_send = message;
+  void *tag_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) + sizeof(int);
   generic_hton(tag_send, &tag, sizeof(int), 1);
+  // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+  // 4)))));
+  void *seq_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2);
+  generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
 
+  int rem_flag = 0;
+  void *rem_flag_send = (char *)message + (sizeof(char) * 4) +
+                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                        sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                        sizeof(unsigned long);
+  generic_hton(rem_flag_send, &rem_flag, sizeof(int), 1);
   // Add data payload
-  void *buf_send = (char *)message + sizeof(int);
+  void *buf_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2) + sizeof(unsigned long) + sizeof(int);
   switch (datatype) {
   case MPI_CHAR:
     generic_hton(buf_send, buf, sizeof(char), count);
@@ -324,7 +442,7 @@ int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
 
   // Send UDP message using the global socket and peer address table
   ssize_t sent =
-      sendto(udp_socket_fd, message, total_size, 0,
+      sendto(udp_socket_barrier_fd, message, total_size, 0,
              (struct sockaddr *)&peer_addrs[dest], sizeof(struct sockaddr_in));
 
   free(message);
@@ -332,9 +450,438 @@ int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
   if (sent != total_size) {
     perror("sendto failed");
     return -1;
+
+    return count;
+  }
+}
+
+static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
+                      int root, int dest, int tag, MPI_Collective collective) {
+  int size = datatype_size_in_bytes(count, datatype);
+  if (size < 1) {
+    return -1;
+  }
+
+  // Create message with tag header
+  int total_size = (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2) + sizeof(unsigned long) + size;
+  // printf("send total size %d\n", total_size);
+
+  unsigned long seq = 0;
+
+  if (total_size > 1472) {
+    size_t offset = 0;
+    const size_t N = (size_t)ceil((double)total_size / (double)1472);
+    size_t base = (size_t)ceil((double)total_size / (double)N);
+    size_t chunk = bytes_size_in_unit(base, datatype);
+    size_t chunk_headless =
+        chunk -
+        ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+         sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+    size_t chunk_rem = bytes_size_in_unit(base + 1, datatype);
+    size_t chunk_rem_headless =
+        chunk_rem -
+        ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+         sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+    size_t rem = total_size % N;
+    // printf("send base: %lu chunk:%d chunk+:%d rem:%lu\n", base, chunk,
+    //        chunk_rem, rem);
+    for (size_t i = 0; i < rem; i++) {
+      void *message = malloc(total_size);
+      if (!message) {
+        perror("malloc failed");
+        return -1;
+      }
+      char header_mpi[4] = {'M', 'P', 'I', '\0'};
+      void *header_mpi_send = message;
+      generic_hton(header_mpi_send, header_mpi, sizeof(char), 4);
+      // printf("%s\n", message);
+
+      void *root_send = (char *)message + (sizeof(char) * 4);
+      generic_hton(root_send, &root, sizeof(int), 1);
+
+      void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
+      generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
+
+      void *dst_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+      generic_hton(dst_send, &dest, sizeof(int), 1);
+
+      void *opcode_send =
+          (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+      generic_hton(opcode_send, &collective, sizeof(MPI_Collective), 1);
+
+      void *datatype_send = (char *)message + (sizeof(char) * 4) +
+                            (sizeof(int) * 3) + sizeof(MPI_Collective);
+      generic_hton(datatype_send, &datatype, sizeof(MPI_Datatype), 1);
+
+      void *len_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype);
+      generic_hton(len_send, &chunk_rem_headless, sizeof(int), 1);
+
+      // Add tag to message header
+      void *tag_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + sizeof(int);
+      generic_hton(tag_send, &tag, sizeof(int), 1);
+      // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+      // 4)))));
+      void *seq_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2);
+      generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
+
+      // Add data payload
+      void *buf_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                       sizeof(unsigned long);
+
+      void *bufptr = NULL;
+      switch (datatype) {
+      case MPI_CHAR:
+        bufptr = (void *)((char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(char), chunk_rem);
+        break;
+      case MPI_SIGNED_CHAR:
+        bufptr = (void *)((signed char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(signed char), chunk_rem);
+        break;
+      case MPI_UNSIGNED_CHAR:
+        bufptr = (void *)((unsigned char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned char), chunk_rem);
+        break;
+      case MPI_SHORT:
+        bufptr = (void *)((short *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(short), chunk_rem);
+        break;
+      case MPI_UNSIGNED_SHORT:
+        bufptr = (void *)((unsigned short *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned short), chunk_rem);
+        break;
+      case MPI_INT:
+        bufptr = (void *)((int *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(int), chunk_rem);
+        break;
+      case MPI_UNSIGNED:
+        bufptr = (void *)((unsigned *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned), chunk_rem);
+        break;
+      case MPI_LONG:
+        bufptr = (void *)((long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long), chunk_rem);
+        break;
+      case MPI_UNSIGNED_LONG:
+        bufptr = (void *)((unsigned long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned long), chunk_rem);
+        break;
+      case MPI_LONG_LONG:
+        bufptr = (void *)((long long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long long), chunk_rem);
+        break;
+      case MPI_UNSIGNED_LONG_LONG:
+        bufptr = (void *)((unsigned long long *)buf + offset);
+        generic_hton(buf_send, buf, sizeof(unsigned long long), chunk_rem);
+        break;
+      case MPI_FLOAT:
+        bufptr = (void *)((float *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(float), chunk_rem);
+        break;
+      case MPI_DOUBLE:
+        bufptr = (void *)((double *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(double), chunk_rem);
+        break;
+      case MPI_LONG_DOUBLE:
+        bufptr = (void *)((long double *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long double), chunk_rem);
+        break;
+      case MPI_C_BOOL:
+        bufptr = (void *)((bool *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(bool), chunk_rem);
+        break;
+      case MPI_WCHAR:
+        bufptr = (void *)((wchar_t *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(wchar_t), chunk_rem);
+        break;
+      default:
+        free(message);
+        return -1;
+      }
+
+      // Send UDP message using the global socket and peer address table
+      ssize_t sent = sendto(udp_socket_fd, message, base + 1, 0,
+                            (struct sockaddr *)&peer_addrs[dest],
+                            sizeof(struct sockaddr_in));
+
+      free(message);
+
+      if (sent != (base + 1)) {
+        perror("sendto failed");
+        return -1;
+      }
+      seq += 1;
+      offset += chunk_rem_headless;
+    }
+    for (size_t i = 0; i < (N - rem); i++) {
+      void *message = malloc(total_size);
+      if (!message) {
+        perror("malloc failed");
+        return -1;
+      }
+      char header_mpi[4] = {'M', 'P', 'I', '\0'};
+      void *header_mpi_send = message;
+      generic_hton(header_mpi_send, header_mpi, sizeof(char), 4);
+      // printf("%s\n", message);
+
+      void *root_send = (char *)message + (sizeof(char) * 4);
+      generic_hton(root_send, &root, sizeof(int), 1);
+
+      void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
+      generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
+
+      void *dst_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+      generic_hton(dst_send, &dest, sizeof(int), 1);
+
+      void *opcode_send =
+          (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+      generic_hton(opcode_send, &collective, sizeof(MPI_Collective), 1);
+
+      void *datatype_send = (char *)message + (sizeof(char) * 4) +
+                            (sizeof(int) * 3) + sizeof(MPI_Collective);
+      generic_hton(datatype_send, &datatype, sizeof(MPI_Datatype), 1);
+
+      void *len_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype);
+      generic_hton(len_send, &chunk_headless, sizeof(int), 1);
+
+      // Add tag to message header
+      void *tag_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + sizeof(int);
+      generic_hton(tag_send, &tag, sizeof(int), 1);
+      // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+      // 4)))));
+      void *seq_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2);
+      generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
+
+      // Add data payload
+      void *buf_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                       sizeof(unsigned long);
+
+      void *bufptr = NULL;
+      switch (datatype) {
+      case MPI_CHAR: {
+        bufptr = (void *)((char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(char), chunk);
+      } break;
+      case MPI_SIGNED_CHAR: {
+        bufptr = (void *)((signed char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(signed char), chunk);
+      } break;
+      case MPI_UNSIGNED_CHAR: {
+        bufptr = (void *)((unsigned char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned char), chunk);
+      } break;
+      case MPI_SHORT: {
+        bufptr = (void *)((short *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(short), chunk);
+      } break;
+      case MPI_UNSIGNED_SHORT: {
+        bufptr = (void *)((unsigned short *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned short), chunk);
+      } break;
+      case MPI_INT: {
+        bufptr = (void *)((int *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(int), chunk);
+      } break;
+      case MPI_UNSIGNED: {
+        bufptr = (void *)((unsigned *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned), chunk);
+      } break;
+      case MPI_LONG: {
+        bufptr = (void *)((long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long), chunk);
+      } break;
+      case MPI_UNSIGNED_LONG: {
+        bufptr = (void *)((unsigned long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned long), chunk);
+      } break;
+      case MPI_LONG_LONG: {
+        bufptr = (void *)((long long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long long), chunk);
+      } break;
+      case MPI_UNSIGNED_LONG_LONG: {
+        bufptr = (void *)((unsigned long long *)buf + offset);
+        generic_hton(buf_send, buf, sizeof(unsigned long long), chunk);
+      } break;
+      case MPI_FLOAT: {
+        bufptr = (void *)((float *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(float), chunk);
+      } break;
+      case MPI_DOUBLE: {
+        bufptr = (void *)((double *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(double), chunk);
+      } break;
+      case MPI_LONG_DOUBLE: {
+        bufptr = (void *)((long double *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long double), chunk);
+      } break;
+      case MPI_C_BOOL: {
+        bufptr = (void *)((bool *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(bool), chunk);
+      } break;
+      case MPI_WCHAR: {
+        bufptr = (void *)((wchar_t *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(wchar_t), chunk);
+      } break;
+      default:
+        free(message);
+        return -1;
+      }
+
+      // Send UDP message using the global socket and peer address table
+      ssize_t sent = sendto(udp_socket_fd, message, base, 0,
+                            (struct sockaddr *)&peer_addrs[dest],
+                            sizeof(struct sockaddr_in));
+
+      free(message);
+
+      if (sent != base) {
+        perror("sendto failed");
+        return -1;
+      }
+      seq += 1;
+      offset += chunk_headless;
+    }
+  } else {
+    void *message = malloc(total_size);
+    if (!message) {
+      perror("malloc failed");
+      return -1;
+    }
+    char header_mpi[4] = {'M', 'P', 'I', '\0'};
+    void *header_mpi_send = message;
+    generic_hton(header_mpi_send, header_mpi, sizeof(char), 4);
+    // printf("%s\n", message);
+
+    void *root_send = (char *)message + (sizeof(char) * 4);
+    generic_hton(root_send, &root, sizeof(int), 1);
+
+    void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
+    generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
+
+    void *dst_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+    generic_hton(dst_send, &dest, sizeof(int), 1);
+
+    void *opcode_send =
+        (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+    generic_hton(opcode_send, &collective, sizeof(MPI_Collective), 1);
+
+    void *datatype_send = (char *)message + (sizeof(char) * 4) +
+                          (sizeof(int) * 3) + sizeof(MPI_Collective);
+    generic_hton(datatype_send, &datatype, sizeof(MPI_Datatype), 1);
+
+    void *len_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+    generic_hton(len_send, &count, sizeof(int), 1);
+
+    // Add tag to message header
+    void *tag_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     sizeof(int);
+    generic_hton(tag_send, &tag, sizeof(int), 1);
+    // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+    // 4)))));
+    void *seq_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     (sizeof(int) * 2);
+    generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
+
+    // Add data payload
+    void *buf_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     (sizeof(int) * 2) + sizeof(unsigned long);
+    switch (datatype) {
+    case MPI_CHAR:
+      generic_hton(buf_send, buf, sizeof(char), count);
+      break;
+    case MPI_SIGNED_CHAR:
+      generic_hton(buf_send, buf, sizeof(signed char), count);
+      break;
+    case MPI_UNSIGNED_CHAR:
+      generic_hton(buf_send, buf, sizeof(unsigned char), count);
+      break;
+    case MPI_SHORT:
+      generic_hton(buf_send, buf, sizeof(short), count);
+      break;
+    case MPI_UNSIGNED_SHORT:
+      generic_hton(buf_send, buf, sizeof(unsigned short), count);
+      break;
+    case MPI_INT:
+      generic_hton(buf_send, buf, sizeof(int), count);
+      break;
+    case MPI_UNSIGNED:
+      generic_hton(buf_send, buf, sizeof(unsigned), count);
+      break;
+    case MPI_LONG:
+      generic_hton(buf_send, buf, sizeof(long), count);
+      break;
+    case MPI_UNSIGNED_LONG:
+      generic_hton(buf_send, buf, sizeof(unsigned long), count);
+      break;
+    case MPI_LONG_LONG:
+      generic_hton(buf_send, buf, sizeof(long long), count);
+      break;
+    case MPI_UNSIGNED_LONG_LONG:
+      generic_hton(buf_send, buf, sizeof(unsigned long long), count);
+      break;
+    case MPI_FLOAT:
+      generic_hton(buf_send, buf, sizeof(float), count);
+      break;
+    case MPI_DOUBLE:
+      generic_hton(buf_send, buf, sizeof(double), count);
+      break;
+    case MPI_LONG_DOUBLE:
+      generic_hton(buf_send, buf, sizeof(long double), count);
+      break;
+    case MPI_C_BOOL:
+      generic_hton(buf_send, buf, sizeof(bool), count);
+      break;
+    case MPI_WCHAR:
+      generic_hton(buf_send, buf, sizeof(wchar_t), count);
+      break;
+    default:
+      free(message);
+      return -1;
+    }
+
+    // Send UDP message using the global socket and peer address table
+    ssize_t sent = sendto(udp_socket_fd, message, total_size, 0,
+                          (struct sockaddr *)&peer_addrs[dest],
+                          sizeof(struct sockaddr_in));
+
+    free(message);
+
+    if (sent != total_size) {
+      perror("sendto failed");
+      return -1;
+    }
   }
 
   return count;
+}
+
+int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
+             int tag) {
+
+  return __mpi_send(buf, count, datatype, MPI_PROCESS->rank, dest, tag,
+                    MPI_SEND);
 }
 
 void print_mpi_message(void *buf, int length, MPI_Datatype datatype) {
@@ -457,13 +1004,18 @@ void print_mpi_message(void *buf, int length, MPI_Datatype datatype) {
   }
 }
 
-int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
+int __mpi_recv_barrier(void *buf, int count, MPI_Datatype datatype, int source,
+                       int tag) {
   int size = datatype_size_in_bytes(count, datatype);
   if (size < 1) {
     return -1;
   }
 
-  int total_size = sizeof(int) + size;
+  int total_size = (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2) + sizeof(unsigned long) + sizeof(int) +
+                   size;
+
   void *message = malloc(total_size);
   if (!message) {
     perror("malloc failed");
@@ -474,7 +1026,7 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
   socklen_t sender_len = sizeof(sender_addr);
 
   // Receive UDP message using the global socket
-  ssize_t received = recvfrom(udp_socket_fd, message, total_size, 0,
+  ssize_t received = recvfrom(udp_socket_barrier_fd, message, total_size, 0,
                               (struct sockaddr *)&sender_addr, &sender_len);
 
   if (received < sizeof(int)) {
@@ -482,14 +1034,72 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
     printf("failed recv - message too short\n");
     return -1;
   }
+  char header_mpi[4];
+  generic_ntoh(header_mpi, message, sizeof(char), 4);
 
-  // Extract tag from message header
+  int root;
+  void *root_recv = (char *)message + (sizeof(char) * 4);
+  generic_ntoh(&root, root_recv, sizeof(int), 1);
+
+  int src;
+  void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+  generic_ntoh(&src, src_recv, sizeof(int), 1);
+
+  // if (root != source) {
+  //   perror("root differet from the source\n");
+  //   exit(EXIT_FAILURE);
+  // }
+
+  int dst;
+  void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+  generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+
+  MPI_Collective collective;
+  void *collective_recv =
+      (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+  generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+
+  MPI_Datatype __datatype;
+  void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                        (sizeof(int) * 3) + sizeof(MPI_Collective);
+  generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+
+  int len;
+  void *len_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+  generic_ntoh(&len, len_recv, sizeof(int), 1);
+
+  // Add tag to message header
+  // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+  // 4)))));
+
   int tag_int;
-  generic_ntoh(&tag_int, message, sizeof(int), 1);
+  void *tag_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) + sizeof(int);
+  generic_ntoh(&tag, tag_recv, sizeof(int), 1);
+
+  unsigned long seq;
+  void *seq_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2);
+  generic_ntoh(&seq, &seq_recv, sizeof(unsigned long), 1);
+
+  int rem_flag;
+  void *rem_flag_recv = (char *)message + (sizeof(char) * 4) +
+                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                        sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                        sizeof(unsigned long);
+  generic_ntoh(&rem_flag, rem_flag_recv, sizeof(int), 1);
 
   // Extract data payload
-  void *buf_recv = (char *)message + sizeof(int);
-  int data_size = received - sizeof(int);
+  void *buf_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2) + sizeof(unsigned long) + sizeof(int);
+  int data_size =
+      received -
+      ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+       sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long)) +
+      sizeof(int);
 
   if (data_size != size) {
     free(message);
@@ -564,756 +1174,478 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
   return count;
 }
 
-int mpi_send_raw_blanch(const void *buf, int count, MPI_Datatype datatype,
-                        int dest, int tag, packet_info *value) {
-
+int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
   int size = datatype_size_in_bytes(count, datatype);
   if (size < 1) {
     return -1;
   }
 
-  // Create message with tag header (same as regular mpi_send)
-  int payload_size = sizeof(int) + size;
-  void *message = malloc(payload_size);
-  if (!message) {
-    perror("malloc failed");
-    return -1;
-  }
+  int total_size = (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2) + sizeof(unsigned long) + size;
 
-  // Add tag to message header
-  void *tag_send = message;
-  generic_hton(tag_send, &tag, sizeof(int), 1);
+  // printf("recv total size %d\n", total_size);
+  if (total_size > 1472) {
+    size_t offset = 0;
+    const size_t N = ceil((double)total_size / (double)1472);
+    size_t base = (size_t)ceil((double)total_size / (double)N);
+    size_t base_rem = base + 1;
+    size_t chunk = bytes_size_in_unit(base, datatype);
+    size_t chunk_headless =
+        chunk -
+        ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+         sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+    size_t chunk_rem = bytes_size_in_unit(base + 1, datatype);
+    size_t chunk_rem_headless =
+        chunk_rem -
+        ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+         sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+    size_t rem = total_size % N;
+    unsigned long seqs[N];
+    memset(seqs, 0, N);
+    Array fragment[N];
+    for (size_t i = 0; i < N; i++) {
+      fragment[i].len = 0;
+      fragment[i].arr = NULL;
+    }
+    // printf("recv base: %lu chunk:%d chunk+:%d rem:%lu\n", base, chunk,
+    //        chunk_rem, rem);
+    for (size_t i = 0; i < N; i++) {
 
-  // Add data payload (same conversion logic as mpi_send)
-  void *buf_send = (char *)message + sizeof(int);
-  switch (datatype) {
-  case MPI_CHAR:
-    generic_hton(buf_send, buf, sizeof(char), count);
-    break;
-  case MPI_SIGNED_CHAR:
-    generic_hton(buf_send, buf, sizeof(signed char), count);
-    break;
-  case MPI_UNSIGNED_CHAR:
-    generic_hton(buf_send, buf, sizeof(unsigned char), count);
-    break;
-  case MPI_SHORT:
-    generic_hton(buf_send, buf, sizeof(short), count);
-    break;
-  case MPI_UNSIGNED_SHORT:
-    generic_hton(buf_send, buf, sizeof(unsigned short), count);
-    break;
-  case MPI_INT:
-    generic_hton(buf_send, buf, sizeof(int), count);
-    break;
-  case MPI_UNSIGNED:
-    generic_hton(buf_send, buf, sizeof(unsigned), count);
-    break;
-  case MPI_LONG:
-    generic_hton(buf_send, buf, sizeof(long), count);
-    break;
-  case MPI_UNSIGNED_LONG:
-    generic_hton(buf_send, buf, sizeof(unsigned long), count);
-    break;
-  case MPI_LONG_LONG:
-    generic_hton(buf_send, buf, sizeof(long long), count);
-    break;
-  case MPI_UNSIGNED_LONG_LONG:
-    generic_hton(buf_send, buf, sizeof(unsigned long long), count);
-    break;
-  case MPI_FLOAT:
-    generic_hton(buf_send, buf, sizeof(float), count);
-    break;
-  case MPI_DOUBLE:
-    generic_hton(buf_send, buf, sizeof(double), count);
-    break;
-  case MPI_LONG_DOUBLE:
-    generic_hton(buf_send, buf, sizeof(long double), count);
-    break;
-  case MPI_C_BOOL:
-    generic_hton(buf_send, buf, sizeof(bool), count);
-    break;
-  case MPI_WCHAR:
-    generic_hton(buf_send, buf, sizeof(wchar_t), count);
-    break;
-  default:
-    free(message);
-    return -1;
-  }
+      void *message = malloc(total_size);
+      if (!message) {
+        perror("malloc failed");
+        return -1;
+      }
+      memset(message, 0, total_size);
 
-  // Get socket info for the destination process
-  tuple_process key = {MPI_PROCESS->rank, dest};
-  socket_id socket_info = {0};
+      struct sockaddr_in sender_addr;
+      socklen_t sender_len = sizeof(sender_addr);
 
-  if (bpf_map_lookup_elem(EBPF_INFO.mpi_send_map_fd, &key, &socket_info) != 0) {
-    printf("Failed to lookup socket info for rank %d -> %d\n",
-           MPI_PROCESS->rank, dest);
-    free(message);
-    return -1;
-  }
+      // Receive UDP message using the global socket
+      ssize_t received = recvfrom(udp_socket_fd, message, total_size, 0,
+                                  (struct sockaddr *)&sender_addr, &sender_len);
 
-  // Extract MAC addresses from the packet_info value parameter
-  uint8_t dst_mac[ETH_ALEN];
-  uint8_t src_mac[ETH_ALEN];
+      if (received < sizeof(int)) {
+        free(message);
+        printf("failed recv - message too short\n");
+        return -1;
+      }
+      char header_mpi[4];
+      generic_ntoh(header_mpi, message, sizeof(char), 4);
 
-  // Copy source MAC from packet_info as destination MAC for our packet
-  memcpy(dst_mac, &value->eth_hdr[6],
-         ETH_ALEN); // Source MAC from received packet
-  // Copy destination MAC from packet_info as source MAC for our packet
-  memcpy(src_mac, &value->eth_hdr[0],
-         ETH_ALEN); // Dest MAC from received packet
+      int root;
+      void *root_recv = (char *)message + (sizeof(char) * 4);
+      generic_ntoh(&root, root_recv, sizeof(int), 1);
 
-  // Build the complete packet
-  size_t eth_hdr_len = sizeof(struct ether_header);
-  size_t ip_hdr_len = sizeof(struct iphdr);
-  size_t udp_hdr_len = sizeof(struct udphdr);
-  size_t total_len = eth_hdr_len + ip_hdr_len + udp_hdr_len + payload_size;
+      int src;
+      void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+      generic_ntoh(&src, src_recv, sizeof(int), 1);
 
-  uint8_t *packet = malloc(total_len);
-  if (!packet) {
-    free(message);
-    return -1;
-  }
-  memset(packet, 0, total_len);
+      int dst;
+      void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+      generic_ntoh(&dst, dst_recv, sizeof(int), 1);
 
-  // 1) Ethernet header
-  struct ether_header *eth = (struct ether_header *)packet;
-  memcpy(eth->ether_dhost, dst_mac, ETH_ALEN); // Use extracted dest MAC
-  memcpy(eth->ether_shost, src_mac, ETH_ALEN); // Use extracted source MAC
-  eth->ether_type = htons(ETHERTYPE_IP);
+      MPI_Collective collective;
+      void *collective_recv =
+          (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+      generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
 
-  // 2) IPv4 header
-  struct iphdr *ip = (struct iphdr *)(packet + eth_hdr_len);
-  ip->version = 4;
-  ip->ihl = ip_hdr_len / 4; // 5 words = 20 bytes
-  ip->tos = 0;
-  ip->tot_len = htons(ip_hdr_len + udp_hdr_len + payload_size);
-  ip->id = htons(0x1234);
-  ip->frag_off = htons(0x4000); // DF set
-  ip->ttl = 64;
-  ip->protocol = IPPROTO_UDP;
-  if (socket_info.src_ip == 16777343) {
+      MPI_Datatype __datatype;
+      void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                            (sizeof(int) * 3) + sizeof(MPI_Collective);
+      generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
 
-    ip->saddr = 0; // use socket info from bpf map
-  } else {
-    ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-  }
-  // ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-  // ip->saddr = 0; // use socket info from bpf map
-  // ip->daddr = socket_info.src_ip; // Use socket info from BPF map
-  // ip->daddr = 0; // use socket info from bpf map
-  if (socket_info.dst_ip == 16777343) {
+      int len;
+      void *len_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype);
+      generic_ntoh(&len, len_recv, sizeof(int), 1);
 
-    ip->daddr = 0; // use socket info from bpf map
-  } else {
-    ip->daddr = socket_info.src_ip; // Use socket info from BPF map
-  }
-  ip->check = 0;
-  ip->check = ip_checksum(ip, ip_hdr_len);
+      // Add tag to message header
+      // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+      // 4)))));
 
-  // 3) UDP header
-  struct udphdr *udp = (struct udphdr *)(packet + eth_hdr_len + ip_hdr_len);
-  udp->source = htons(socket_info.src_port);
-  udp->dest = htons(socket_info.dst_port);
-  udp->len = htons(udp_hdr_len + payload_size);
-  udp->check = 0; // UDP checksum is optional for IPv4
-  // udp->check = udp_checksum(
-  //     udp, udp_hdr_len + payload_size);
+      int tag_int;
+      void *tag_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + sizeof(int);
+      generic_ntoh(&tag, tag_recv, sizeof(int), 1);
 
-  // 4) Copy MPI payload (tag + data)
-  memcpy(packet + eth_hdr_len + ip_hdr_len + udp_hdr_len, message,
-         payload_size);
+      unsigned long seq;
+      void *seq_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2);
+      generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
 
-  // Create raw socket for sending
-  int raw_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-  if (raw_socket < 0) {
-    perror("Failed to create raw socket");
-    free(message);
-    free(packet);
-    return -1;
-  }
+      // Extract data payload
+      void *buf_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                       sizeof(unsigned long);
+      int data_size =
+          received -
+          ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
 
-  // Determine the interface to send on
-  // You can get this from the ingress_ifindex in packet_info
-  int ifindex = value->ingress_ifindex;
-  if (ifindex == 0) {
-    // Fallback to loopback interface if no interface specified
-    ifindex = if_nametoindex("lo");
-    if (ifindex == 0) {
-      perror("Failed to get interface index");
-      close(raw_socket);
+      // printf("rank: %d datasize: %d\n", MPI_PROCESS->rank, data_size);
+      size_t base_headless =
+          base -
+          ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+      size_t base_rem_headless =
+          (base_rem) -
+          ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+
+      if (data_size != base_headless && data_size != base_rem_headless) {
+        free(message);
+        printf("received data size mismatch:: 1\n");
+        exit(EXIT_FAILURE);
+        // }
+      }
+      fragment[seq].len = len;
+      fragment[seq].arr = malloc(datatype_size_in_bytes(len, datatype));
+      switch (datatype) {
+      case MPI_CHAR: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(char),
+                     fragment[i].len);
+        // char *buf_char = (char *)buf;
+        // buf_char[count - 1] = '\0';
+      } break;
+      case MPI_SIGNED_CHAR: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(signed char),
+                     fragment[i].len);
+        // signed char *buf_char = (signed char *)buf;
+        // buf_char[count - 1] = '\0';
+      } break;
+      case MPI_UNSIGNED_CHAR: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(unsigned char),
+                     fragment[i].len);
+        // unsigned char *buf_char = (unsigned char *)buf;
+        // buf_char[count - 1] = '\0';
+      } break;
+      case MPI_SHORT: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(short),
+                     fragment[i].len);
+      } break;
+      case MPI_UNSIGNED_SHORT: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(unsigned short),
+                     fragment[i].len);
+      } break;
+      case MPI_INT: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(int), fragment[i].len);
+      } break;
+      case MPI_UNSIGNED: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(unsigned),
+                     fragment[i].len);
+      } break;
+      case MPI_LONG: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(long),
+                     fragment[i].len);
+      } break;
+      case MPI_UNSIGNED_LONG: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(unsigned long),
+                     fragment[i].len);
+      } break;
+      case MPI_LONG_LONG: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(long long),
+                     fragment[i].len);
+      } break;
+      case MPI_UNSIGNED_LONG_LONG: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(unsigned long long),
+                     fragment[i].len);
+      } break;
+      case MPI_FLOAT: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(float),
+                     fragment[i].len);
+      } break;
+      case MPI_DOUBLE: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(double),
+                     fragment[i].len);
+      } break;
+      case MPI_LONG_DOUBLE: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(long double),
+                     fragment[i].len);
+      } break;
+      case MPI_C_BOOL: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(bool),
+                     fragment[i].len);
+      } break;
+      case MPI_WCHAR: {
+        generic_ntoh(fragment[seq].arr, buf_recv, sizeof(wchar_t),
+                     fragment[i].len);
+        // wchar_t *buf_char = (wchar_t *)buf;
+        // buf_char[count - 1] = L'\0';
+      } break;
+      default:
+        free(message);
+        return -1;
+      }
+
       free(message);
-      free(packet);
+    }
+    for (size_t i = 0; i < N; i++) {
+
+      void *bufptr = NULL;
+      switch (datatype) {
+      case MPI_CHAR: {
+        bufptr = (void *)((char *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(char), fragment[i].len);
+        char *buf_char = (char *)buf;
+        buf_char[count - 1] = '\0';
+        // printf("rank: %d 0\n%s\n", MPI_PROCESS->rank, (char *)bufptr);
+        // printf("1. rank: %d  char: %s seq: %lu buf: %p bufptr: %p\n",
+        //        MPI_PROCESS->rank, ((char *)fragment[i].arr), i, buf, bufptr);
+        // print_mpi_message(buf_recv, chunk, MPI_CHAR);
+      } break;
+      case MPI_SIGNED_CHAR: {
+        bufptr = (void *)((signed char *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(signed char),
+                     fragment[i].len);
+        signed char *buf_char = (signed char *)bufptr;
+        buf_char[count - 1] = '\0';
+      } break;
+      case MPI_UNSIGNED_CHAR: {
+        bufptr = (void *)((unsigned char *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(unsigned char),
+                     fragment[i].len);
+        unsigned char *buf_char = (unsigned char *)bufptr;
+        buf_char[count - 1] = '\0';
+      } break;
+      case MPI_SHORT: {
+        bufptr = (void *)((short *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(short), fragment[i].len);
+      } break;
+      case MPI_UNSIGNED_SHORT: {
+        bufptr = (void *)((unsigned short *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(unsigned short),
+                     fragment[i].len);
+      } break;
+      case MPI_INT: {
+        bufptr = (void *)((int *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(int), fragment[i].len);
+      } break;
+      case MPI_UNSIGNED: {
+        bufptr = (void *)((unsigned *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(unsigned),
+                     fragment[i].len);
+      } break;
+      case MPI_LONG: {
+        bufptr = (void *)((long *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(long), fragment[i].len);
+      } break;
+      case MPI_UNSIGNED_LONG: {
+        bufptr = (void *)((unsigned long *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(unsigned long),
+                     fragment[i].len);
+      } break;
+      case MPI_LONG_LONG: {
+        bufptr = (void *)((long long *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(long long),
+                     fragment[i].len);
+      } break;
+      case MPI_UNSIGNED_LONG_LONG: {
+        bufptr = (void *)((unsigned long long *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(unsigned long long),
+                     fragment[i].len);
+      } break;
+      case MPI_FLOAT: {
+        bufptr = (void *)((float *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(float), fragment[i].len);
+      } break;
+      case MPI_DOUBLE: {
+        bufptr = (void *)((double *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(double), fragment[i].len);
+      } break;
+      case MPI_LONG_DOUBLE: {
+        bufptr = (void *)((long double *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(long double),
+                     fragment[i].len);
+      } break;
+      case MPI_C_BOOL: {
+        bufptr = (void *)((bool *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(bool), fragment[i].len);
+      } break;
+      case MPI_WCHAR: {
+        bufptr = (void *)((wchar_t *)buf + offset);
+        generic_ntoh(bufptr, fragment[i].arr, sizeof(wchar_t), fragment[i].len);
+        wchar_t *buf_char = (wchar_t *)bufptr;
+        buf_char[count - 1] = L'\0';
+      } break;
+      default:
+        return -1;
+      }
+
+      offset += fragment[i].len;
+    }
+    for (size_t i = 0; i < N; i++) {
+      free(fragment[i].arr);
+    }
+  } else {
+    void *message = malloc(total_size);
+    if (!message) {
+      perror("malloc failed");
       return -1;
     }
-  }
 
-  // Prepare sockaddr_ll for raw socket
-  struct sockaddr_ll socket_address;
-  socket_address.sll_family = AF_PACKET;
-  socket_address.sll_protocol = htons(ETH_P_ALL);
-  socket_address.sll_ifindex = ifindex;
-  socket_address.sll_halen = ETH_ALEN;
-  memcpy(socket_address.sll_addr, dst_mac, ETH_ALEN);
+    struct sockaddr_in sender_addr;
+    socklen_t sender_len = sizeof(sender_addr);
 
-  printf("Sending raw packet (rank %d -> %d) on interface %d...\n",
-         MPI_PROCESS->rank, dest, ifindex);
+    // Receive UDP message using the global socket
+    ssize_t received = recvfrom(udp_socket_fd, message, total_size, 0,
+                                (struct sockaddr *)&sender_addr, &sender_len);
 
-  // Send the complete Ethernet frame via raw socket
-  ssize_t sent =
-      sendto(raw_socket, packet, total_len, 0,
-             (struct sockaddr *)&socket_address, sizeof(socket_address));
+    if (received < sizeof(int)) {
+      free(message);
+      printf("failed recv - message too short\n");
+      return -1;
+    }
+    char header_mpi[4];
+    generic_ntoh(header_mpi, message, sizeof(char), 4);
 
-  // ssize_t sent_ =
-  //     sendto(udp_socket_fd, message, payload_size, 0,
-  //            (struct sockaddr *)&peer_addrs[dest], sizeof(struct
-  //            sockaddr_in));
+    int root;
+    void *root_recv = (char *)message + (sizeof(char) * 4);
+    generic_ntoh(&root, root_recv, sizeof(int), 1);
 
-  close(raw_socket);
+    int src;
+    void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+    generic_ntoh(&src, src_recv, sizeof(int), 1);
 
-  if (sent != total_len) {
-    perror("Raw socket sendto failed");
-    printf("Sent %zd bytes out of %zu\n", sent, total_len);
+    // if (root != source) {
+    //   perror("root differet from the source\n");
+    //   exit(EXIT_FAILURE);
+    // }
+
+    int dst;
+    void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+    generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+
+    MPI_Collective collective;
+    void *collective_recv =
+        (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+    generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+
+    MPI_Datatype __datatype;
+    void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                          (sizeof(int) * 3) + sizeof(MPI_Collective);
+    generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+
+    int len;
+    void *len_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+    generic_ntoh(&len, len_recv, sizeof(int), 1);
+
+    // Add tag to message header
+    // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+    // 4)))));
+
+    int tag_int;
+    void *tag_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     sizeof(int);
+    generic_ntoh(&tag, tag_recv, sizeof(int), 1);
+
+    unsigned long seq;
+    void *seq_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     (sizeof(int) * 2);
+    generic_ntoh(&seq, &seq_recv, sizeof(unsigned long), 1);
+
+    int rem_flag;
+    void *rem_flag_recv = (char *)message + (sizeof(char) * 4) +
+                          (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                          sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                          sizeof(unsigned long);
+    generic_ntoh(&rem_flag, rem_flag_recv, sizeof(int), 1);
+
+    // Extract data payload
+    void *buf_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     (sizeof(int) * 2) + sizeof(unsigned long);
+    int data_size = received - ((sizeof(char) * 4) + (sizeof(int) * 3) +
+                                sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                                (sizeof(int) * 2) + sizeof(unsigned long));
+
+    if (data_size != size) {
+      free(message);
+      printf("received data size mismatch\n");
+      return -1;
+    }
+
+    // Convert from network byte order to host byte order
+    switch (datatype) {
+    case MPI_CHAR: {
+      generic_ntoh(buf, buf_recv, sizeof(char), count);
+      char *buf_char = (char *)buf;
+      buf_char[count - 1] = '\0';
+    } break;
+    case MPI_SIGNED_CHAR: {
+      generic_ntoh(buf, buf_recv, sizeof(signed char), count);
+      signed char *buf_char = (signed char *)buf;
+      buf_char[count - 1] = '\0';
+    } break;
+    case MPI_UNSIGNED_CHAR: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned char), count);
+      unsigned char *buf_char = (unsigned char *)buf;
+      buf_char[count - 1] = '\0';
+    } break;
+    case MPI_SHORT: {
+      generic_ntoh(buf, buf_recv, sizeof(short), count);
+    } break;
+    case MPI_UNSIGNED_SHORT: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned short), count);
+    } break;
+    case MPI_INT: {
+      generic_ntoh(buf, buf_recv, sizeof(int), count);
+    } break;
+    case MPI_UNSIGNED: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned), count);
+    } break;
+    case MPI_LONG: {
+      generic_ntoh(buf, buf_recv, sizeof(long), count);
+    } break;
+    case MPI_UNSIGNED_LONG: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned long), count);
+    } break;
+    case MPI_LONG_LONG: {
+      generic_ntoh(buf, buf_recv, sizeof(long long), count);
+    } break;
+    case MPI_UNSIGNED_LONG_LONG: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned long long), count);
+    } break;
+    case MPI_FLOAT: {
+      generic_ntoh(buf, buf_recv, sizeof(float), count);
+    } break;
+    case MPI_DOUBLE: {
+      generic_ntoh(buf, buf_recv, sizeof(double), count);
+    } break;
+    case MPI_LONG_DOUBLE: {
+      generic_ntoh(buf, buf_recv, sizeof(long double), count);
+    } break;
+    case MPI_C_BOOL: {
+      generic_ntoh(buf, buf_recv, sizeof(bool), count);
+    } break;
+    case MPI_WCHAR: {
+      generic_ntoh(buf, buf_recv, sizeof(wchar_t), count);
+      wchar_t *buf_char = (wchar_t *)buf;
+      buf_char[count - 1] = L'\0';
+    } break;
+    default:
+      free(message);
+      return -1;
+    }
+
     free(message);
-    free(packet);
-    return -1;
   }
-
-  printf("Successfully sent %zd bytes via raw socket\n", sent);
-
-  free(message);
-  free(packet);
   return count;
 }
 
-int mpi_send_raw_blanch_v2(int dest, MPI_Opcode opcode, MPI_Datatype datatype,
-                           int tag) {
-
-  int payload_info_for_xdp[] = {MPI_PROCESS->rank, dest, opcode, datatype};
-  int size = datatype_size_in_bytes(sizeof(payload_info_for_xdp) / sizeof(int),
-                                    MPI_INT);
-  if (size < 1) {
-    return -1;
-  }
-
-  // Create message with tag header (same as regular mpi_send)
-  int payload_size = size + sizeof(int);
-  void *message = malloc(payload_size);
-  if (!message) {
-    perror("malloc failed");
-    return -1;
-  }
-
-  // Add tag to message header
-  void *tag_send = message;
-  generic_hton(tag_send, &tag, sizeof(int), 1);
-
-  // Add data payload (same conversion logic as mpi_send)
-  void *buf_send = (char *)message + sizeof(int);
-  generic_hton(buf_send, payload_info_for_xdp, sizeof(int),
-               sizeof(payload_info_for_xdp) / sizeof(int));
-
-  uint8_t dst_mac[ETH_ALEN];
-  uint8_t src_mac[ETH_ALEN];
-
-  memset(dst_mac, 0x00, ETH_ALEN);
-  memset(src_mac, 0x00, ETH_ALEN);
-
-  // Build the complete packet
-  size_t eth_hdr_len = sizeof(struct ether_header);
-  size_t ip_hdr_len = sizeof(struct iphdr);
-  size_t udp_hdr_len = sizeof(struct udphdr);
-  size_t total_len = eth_hdr_len + ip_hdr_len + udp_hdr_len + payload_size;
-
-  uint8_t *packet = malloc(total_len);
-  if (!packet) {
-    free(message);
-    return -1;
-  }
-  memset(packet, 0, total_len);
-
-  // 1) Ethernet header
-  struct ether_header *eth = (struct ether_header *)packet;
-  memcpy(eth->ether_dhost, dst_mac, ETH_ALEN); // Use extracted dest MAC
-  memcpy(eth->ether_shost, src_mac,
-         ETH_ALEN); // Use extracted source MAC
-  eth->ether_type = htons(ETHERTYPE_IP);
-
-  // 2) IPv4 header
-  struct iphdr *ip = (struct iphdr *)(packet + eth_hdr_len);
-  ip->version = 4;
-  ip->ihl = ip_hdr_len / 4; // 5 words = 20 bytes
-  ip->tos = 0;
-  ip->tot_len = htons(ip_hdr_len + udp_hdr_len + payload_size);
-  ip->id = htons(0x1234);
-  ip->frag_off = htons(0x4000); // DF set
-  ip->ttl = 64;
-  ip->protocol = IPPROTO_UDP;
-
-  ip->saddr = 0; // use socket info from bpf map
-  ip->daddr = 0; // use socket info from bpf map
-  ip->check = 0;
-  ip->check = ip_checksum(ip, ip_hdr_len);
-
-  // 3) UDP header
-  struct udphdr *udp = (struct udphdr *)(packet + eth_hdr_len + ip_hdr_len);
-  udp->source = 0;
-  udp->dest = 0;
-  udp->len = htons(udp_hdr_len + payload_size);
-  udp->check = 0; // UDP checksum is optional for IPv4
-  // udp->check = udp_checksum(
-  //     udp, udp_hdr_len + payload_size);
-
-  // 4) Copy MPI payload (tag + data)
-  memcpy(packet + eth_hdr_len + ip_hdr_len + udp_hdr_len, message,
-         payload_size);
-
-  // Create raw socket for sending
-  int raw_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-  if (raw_socket < 0) {
-    perror("Failed to create raw socket");
-    free(message);
-    free(packet);
-    return -1;
-  }
-
-  // Determine the interface to send on
-  // You can get this from the ingress_ifindex in packet_info
-  int ifindex = 0;
-  if (ifindex == 0) {
-    // Fallback to loopback interface if no interface specified
-    ifindex = if_nametoindex("lo");
-    if (ifindex == 0) {
-      perror("Failed to get interface index");
-      close(raw_socket);
-      free(message);
-      free(packet);
-      return -1;
-    }
-  }
-
-  // Prepare sockaddr_ll for raw socket
-  struct sockaddr_ll socket_address;
-  socket_address.sll_family = AF_PACKET;
-  socket_address.sll_protocol = htons(ETH_P_ALL);
-  socket_address.sll_ifindex = ifindex;
-  socket_address.sll_halen = ETH_ALEN;
-  memcpy(socket_address.sll_addr, dst_mac, ETH_ALEN);
-
-  printf("Sending raw packet (rank %d -> %d) on interface %d...\n",
-         MPI_PROCESS->rank, dest, ifindex);
-
-  // Send the complete Ethernet frame via raw socket
-  ssize_t sent =
-      sendto(raw_socket, packet, total_len, 0,
-             (struct sockaddr *)&socket_address, sizeof(socket_address));
-
-  close(raw_socket);
-
-  if (sent != total_len) {
-    perror("Raw socket sendto failed");
-    printf("Sent %zd bytes out of %zu\n", sent, total_len);
-    free(message);
-    free(packet);
-    return -1;
-  }
-
-  printf("Successfully sent %zd bytes via raw socket\n", sent);
-
-  free(message);
-  free(packet);
-  return 0;
-}
-
-int mpi_send_xdp_blanch(int dest, MPI_Opcode opcode, MPI_Datatype datatype,
-                        int tag) {
-
-  int payload_info_for_xdp[] = {MPI_PROCESS->rank, dest, opcode, datatype};
-  int size = datatype_size_in_bytes(sizeof(payload_info_for_xdp) / sizeof(int),
-                                    MPI_INT);
-  if (size < 1) {
-    return -1;
-  }
-
-  // Create message with tag header (same as regular mpi_send)
-  int payload_size = size + sizeof(int);
-  void *message = malloc(payload_size);
-  if (!message) {
-    perror("malloc failed");
-    return -1;
-  }
-
-  // Add tag to message header
-  void *tag_send = message;
-  generic_hton(tag_send, &tag, sizeof(int), 1);
-
-  // Add data payload (same conversion logic as mpi_send)
-  void *buf_send = (char *)message + sizeof(int);
-  generic_hton(buf_send, payload_info_for_xdp, sizeof(int),
-               sizeof(payload_info_for_xdp) / sizeof(int));
-
-  uint8_t dst_mac[ETH_ALEN];
-  uint8_t src_mac[ETH_ALEN];
-
-  memset(dst_mac, 0x00, ETH_ALEN);
-  memset(src_mac, 0x00, ETH_ALEN);
-
-  // Build the complete packet
-  size_t eth_hdr_len = sizeof(struct ether_header);
-  size_t ip_hdr_len = sizeof(struct iphdr);
-  size_t udp_hdr_len = sizeof(struct udphdr);
-  size_t total_len = eth_hdr_len + ip_hdr_len + udp_hdr_len + payload_size;
-
-  uint8_t *packet = malloc(total_len);
-  if (!packet) {
-    free(message);
-    return -1;
-  }
-  memset(packet, 0, total_len);
-
-  // 1) Ethernet header
-  struct ether_header *eth = (struct ether_header *)packet;
-  memcpy(eth->ether_dhost, dst_mac, ETH_ALEN); // Use extracted dest MAC
-  memcpy(eth->ether_shost, src_mac,
-         ETH_ALEN); // Use extracted source MAC
-  eth->ether_type = htons(ETHERTYPE_IP);
-
-  // 2) IPv4 header
-  struct iphdr *ip = (struct iphdr *)(packet + eth_hdr_len);
-  ip->version = 4;
-  ip->ihl = ip_hdr_len / 4; // 5 words = 20 bytes
-  ip->tos = 0;
-  ip->tot_len = htons(ip_hdr_len + udp_hdr_len + payload_size);
-  ip->id = htons(0x1234);
-  ip->frag_off = htons(0x4000); // DF set
-  ip->ttl = 64;
-  ip->protocol = IPPROTO_UDP;
-
-  ip->saddr = 0; // use socket info from bpf map
-  ip->daddr = 0; // use socket info from bpf map
-  ip->check = 0;
-  ip->check = ip_checksum(ip, ip_hdr_len);
-
-  // 3) UDP header
-  struct udphdr *udp = (struct udphdr *)(packet + eth_hdr_len + ip_hdr_len);
-  udp->source = 0;
-  udp->dest = 0;
-  udp->len = htons(udp_hdr_len + payload_size);
-  udp->check = 0; // UDP checksum is optional for IPv4
-  // udp->check = udp_checksum(
-  //     udp, udp_hdr_len + payload_size);
-
-  // 4) Copy MPI payload (tag + data)
-  memcpy(packet + eth_hdr_len + ip_hdr_len + udp_hdr_len, message,
-         payload_size);
-
-  // Now test the packet through XDP program
-  struct bpf_test_run_opts opts = {0};
-  opts.sz = sizeof(opts);
-  opts.flags = BPF_F_TEST_XDP_LIVE_FRAMES; // Don't use live frames for
-  // testing
-  // opts.flags = 0; // Don't use live frames for testing
-  opts.repeat = 0;
-  opts.duration = 0;
-  opts.cpu = 0;
-  opts.batch_size = 1;
-
-  // Provide the constructed packet as input
-  opts.data_in = packet;
-  opts.data_size_in = total_len;
-
-  // Buffer for output (XDP might modify the packet)
-  // uint8_t data_out[2048];
-  opts.data_out = NULL;
-  opts.data_size_out = 0;
-
-  // No context needed for this test
-  opts.ctx_in = NULL;
-  opts.ctx_out = NULL;
-  opts.ctx_size_in = 0;
-  opts.ctx_size_out = 0;
-  // DECLARE_LIBBPF_OPTS(
-  //     bpf_test_run_opts, opts, .data_in = packet, .data_size_in = total_len,
-  //     .ctx_in = NULL, .ctx_size_in = 0, .repeat = 1,
-  //     .flags = BPF_F_TEST_XDP_LIVE_FRAMES, .batch_size = 1, .cpu = 0);
-
-  printf("Testing XDP program with constructed packet (rank %d -> %d)...\n",
-         MPI_PROCESS->rank, dest);
-
-  int ret = bpf_prog_test_run_opts(EBPF_INFO.loader->prog_fd, &opts);
-  printf("bpf out: %d\n", opts.retval);
-  // int ret =
-  //     xdp_program__test_run(EBPF_INFO.loader->prog, &opts,
-  //     BPF_PROG_TEST_RUN);
-
-  if (ret < 0) {
-    fprintf(stderr, "bpf_prog_test_run_opts failed: %s\n", strerror(-ret));
-    free(message);
-    free(packet);
-    return -1;
-  }
-
-  printf("XDP program returned: %d, duration: %u ns\n", ret, opts.duration);
-
-  // Optionally, you could also send the packet via normal UDP socket
-  // as a fallback or for verification
-  // ssize_t sent =
-  //     sendto(udp_socket_fd, message, payload_size, 0,
-  //            (struct sockaddr *)&peer_addrs[dest], sizeof(struct
-  //            sockaddr_in));
-
-  // if (sent != payload_size) {
-  //   perror("sendto failed");
-  //   free(message);
-  //   free(packet);
-  //   return -1;
-  // }
-
-  free(message);
-  free(packet);
-  return 0;
-}
-
-int mpi_send_raw(const void *buf, int count, MPI_Datatype datatype, int dest,
-                 int tag, packet_info *value) {
-
-  int size = datatype_size_in_bytes(count, datatype);
-  if (size < 1) {
-    return -1;
-  }
-
-  // Create message with tag header (same as regular mpi_send)
-  int payload_size = sizeof(int) + size;
-  void *message = malloc(payload_size);
-  if (!message) {
-    perror("malloc failed");
-    return -1;
-  }
-
-  // Add tag to message header
-  void *tag_send = message;
-  generic_hton(tag_send, &tag, sizeof(int), 1);
-
-  // Add data payload (same conversion logic as mpi_send)
-  void *buf_send = (char *)message + sizeof(int);
-  switch (datatype) {
-  case MPI_CHAR:
-    generic_hton(buf_send, buf, sizeof(char), count);
-    break;
-  case MPI_SIGNED_CHAR:
-    generic_hton(buf_send, buf, sizeof(signed char), count);
-    break;
-  case MPI_UNSIGNED_CHAR:
-    generic_hton(buf_send, buf, sizeof(unsigned char), count);
-    break;
-  case MPI_SHORT:
-    generic_hton(buf_send, buf, sizeof(short), count);
-    break;
-  case MPI_UNSIGNED_SHORT:
-    generic_hton(buf_send, buf, sizeof(unsigned short), count);
-    break;
-  case MPI_INT:
-    generic_hton(buf_send, buf, sizeof(int), count);
-    break;
-  case MPI_UNSIGNED:
-    generic_hton(buf_send, buf, sizeof(unsigned), count);
-    break;
-  case MPI_LONG:
-    generic_hton(buf_send, buf, sizeof(long), count);
-    break;
-  case MPI_UNSIGNED_LONG:
-    generic_hton(buf_send, buf, sizeof(unsigned long), count);
-    break;
-  case MPI_LONG_LONG:
-    generic_hton(buf_send, buf, sizeof(long long), count);
-    break;
-  case MPI_UNSIGNED_LONG_LONG:
-    generic_hton(buf_send, buf, sizeof(unsigned long long), count);
-    break;
-  case MPI_FLOAT:
-    generic_hton(buf_send, buf, sizeof(float), count);
-    break;
-  case MPI_DOUBLE:
-    generic_hton(buf_send, buf, sizeof(double), count);
-    break;
-  case MPI_LONG_DOUBLE:
-    generic_hton(buf_send, buf, sizeof(long double), count);
-    break;
-  case MPI_C_BOOL:
-    generic_hton(buf_send, buf, sizeof(bool), count);
-    break;
-  case MPI_WCHAR:
-    generic_hton(buf_send, buf, sizeof(wchar_t), count);
-    break;
-  default:
-    free(message);
-    return -1;
-  }
-
-  // Get socket info for the destination process
-  tuple_process key = {MPI_PROCESS->rank, dest};
-  socket_id socket_info = {0};
-
-  if (bpf_map_lookup_elem(EBPF_INFO.mpi_send_map_fd, &key, &socket_info) != 0) {
-    printf("Failed to lookup socket info for rank %d -> %d\n",
-           MPI_PROCESS->rank, dest);
-    free(message);
-    return -1;
-  }
-
-  // Extract MAC addresses from the packet_info value parameter
-  // Assuming you want to swap source and destination MAC addresses
-  uint8_t dst_mac[ETH_ALEN];
-  uint8_t src_mac[ETH_ALEN];
-
-  // Extract MAC addresses from ethernet header in packet_info
-  // Copy source MAC from packet_info as destination MAC for our packet
-  // memcpy(dst_mac, &value->eth_hdr[6],
-  //        ETH_ALEN); // Source MAC from received packet
-  // memset(dst_mac, 0xff,
-  //        ETH_ALEN); // Source MAC from received packet
-  // // Copy destination MAC from packet_info as source MAC for our packet
-  // memcpy(src_mac, &value->eth_hdr[0],
-  //        ETH_ALEN); // Dest MAC from received packet
-  // memset(src_mac, 0x00,
-  //        ETH_ALEN); // Dest MAC from received packet
-
-  // Build the complete packet
-  size_t eth_hdr_len = sizeof(struct ether_header);
-  size_t ip_hdr_len = sizeof(struct iphdr);
-  size_t udp_hdr_len = sizeof(struct udphdr);
-  size_t total_len = eth_hdr_len + ip_hdr_len + udp_hdr_len + payload_size;
-
-  uint8_t *packet = malloc(total_len);
-  if (!packet) {
-    free(message);
-    return -1;
-  }
-  memset(packet, 0, total_len);
-
-  // 1) Ethernet header
-  struct ether_header *eth = (struct ether_header *)packet;
-  eth->ether_type = htons(ETHERTYPE_IP);
-
-  // 2) IPv4 header
-  struct iphdr *ip = (struct iphdr *)(packet + eth_hdr_len);
-  ip->version = 4;
-  ip->ihl = ip_hdr_len / 4; // 5 words = 20 bytes
-  ip->tos = 0;
-  ip->tot_len = htons(ip_hdr_len + udp_hdr_len + payload_size);
-  ip->id = htons(0x1234);
-  ip->frag_off = htons(0x4000); // DF set
-  ip->ttl = 64;
-  ip->protocol = IPPROTO_UDP;
-  // if (socket_info.src_ip == 16777343) {
-
-  //   ip->saddr = 0; // use socket info from bpf map
-  // } else {
-  //   ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-  // }
-  // if (socket_info.dst_ip == 16777343) {
-
-  //   ip->daddr = 0; // use socket info from bpf map
-  // } else {
-  //   ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
-  // }
-  ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-  ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
-  if (socket_info.src_ip == socket_info.dst_ip) {
-
-    ip->saddr = 0; // use socket info from bpf map
-    ip->daddr = 0; // use socket info from bpf map
-    // ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-    // ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
-    memcpy(dst_mac, &value->eth_hdr[0],
-           ETH_ALEN); // Source MAC from received packet
-    memcpy(src_mac, &value->eth_hdr[6],
-           ETH_ALEN); // Dest MAC from received packet
-  } else {
-    // ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-    // ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
-    tag = -1 * tag;
-    memcpy(dst_mac, &value->eth_hdr[0],
-           ETH_ALEN); // Source MAC from received packet
-    memcpy(src_mac, &value->eth_hdr[6],
-           ETH_ALEN); // Dest MAC from received packet
-  }
-  memcpy(eth->ether_dhost, dst_mac, ETH_ALEN); // Use extracted dest MAC
-  memcpy(eth->ether_shost, src_mac, ETH_ALEN); // Use extracted source MAC
-  ip->check = 0;
-  ip->check = ip_checksum(ip, ip_hdr_len);
-
-  // 3) UDP header
-  struct udphdr *udp = (struct udphdr *)(packet + eth_hdr_len + ip_hdr_len);
-  udp->source = htons(socket_info.src_port);
-  udp->dest = htons(socket_info.dst_port);
-  udp->len = htons(udp_hdr_len + payload_size);
-  udp->check = 0; // UDP checksum is optional for IPv4
-
-  // 4) Copy MPI payload (tag + data)
-  memcpy(packet + eth_hdr_len + ip_hdr_len + udp_hdr_len, message,
-         payload_size);
-
-  // Create raw socket for sending
-  int raw_socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-  if (raw_socket < 0) {
-    perror("Failed to create raw socket");
-    free(message);
-    free(packet);
-    return -1;
-  }
-
-  // Determine the interface to send on
-  // You can get this from the ingress_ifindex in packet_info
-  int ifindex = value->ingress_ifindex;
-  if (ifindex == 0) {
-    // Fallback to loopback interface if no interface specified
-    ifindex = if_nametoindex("lo");
-    if (ifindex == 0) {
-      perror("Failed to get interface index");
-      close(raw_socket);
-      free(message);
-      free(packet);
-      return -1;
-    }
-  }
-
-  // Prepare sockaddr_ll for raw socket
-  struct sockaddr_ll socket_address;
-  socket_address.sll_family = AF_PACKET;
-  socket_address.sll_protocol = htons(ETH_P_ALL);
-  socket_address.sll_ifindex = ifindex;
-  socket_address.sll_halen = ETH_ALEN;
-  memcpy(socket_address.sll_addr, dst_mac, ETH_ALEN);
-
-  printf("Sending raw packet (rank %d -> %d) on interface %d...\n",
-         MPI_PROCESS->rank, dest, ifindex);
-
-  // Send the complete Ethernet frame via raw socket
-  ssize_t sent =
-      sendto(raw_socket, packet, total_len, 0,
-             (struct sockaddr *)&socket_address, sizeof(socket_address));
-
-  // ssize_t sent_ =
-  //     sendto(udp_socket_fd, message, payload_size, 0,
-  //            (struct sockaddr *)&peer_addrs[dest], sizeof(struct
-  //            sockaddr_in));
-
-  close(raw_socket);
-
-  if (sent != total_len) {
-    perror("Raw socket sendto failed");
-    printf("Sent %zd bytes out of %zu\n", sent, total_len);
-    free(message);
-    free(packet);
-    return -1;
-  }
-
-  printf("Successfully sent %zd bytes via raw socket\n", sent);
-
-  free(message);
-  free(packet);
-  return count;
-}
+// int mpi_barrier(void) {
+//   char bit[1] = "0";
+//   mpi_bcast_ring(bit, sizeof(bit) / sizeof(char), MPI_CHAR, 0);
+//   return 0;
+// }
 
 int mpi_barrier(void) {
   int rank = MPI_PROCESS->rank;
@@ -1349,313 +1681,33 @@ int mpi_barrier(void) {
   return 0;
 }
 
-/* Enqueue `val` into queue `qid`. Returns 0 on success, -1 if full. */
-static int queue_enqueue(__u32 qid, packet_info val) {
-  __u32 head = 0, tail = 0;
+int mpi_barrier_ring(void) {
+  int rank = MPI_PROCESS->rank;
+  int size = WORD_SIZE;
+  int dummy = 0;
+  int tag = -1; // Use a unique tag far from your other operations
 
-  // Correctly lookup head and tail
-  if (bpf_map_lookup_elem(EBPF_INFO.head_map_fd, &qid, &head) != 0) {
-    // Initialize if not found
-    head = 0;
-    bpf_map_update_elem(EBPF_INFO.head_map_fd, &qid, &head, BPF_ANY);
-  }
+  // Simple ring-based barrier (compatible with your broadcast)
+  int next = (rank + 1) % size;
+  int prev = (rank - 1 + size) % size;
 
-  if (bpf_map_lookup_elem(EBPF_INFO.tail_map_fd, &qid, &tail) != 0) {
-    tail = 0;
-    bpf_map_update_elem(EBPF_INFO.tail_map_fd, &qid, &tail, BPF_ANY);
-  }
-
-  __u32 next_tail = (tail + 1) & QUEUE_MASK;
-  if (next_tail == (head & QUEUE_MASK)) {
-    return -1; // Queue full
-  }
-
-  __u32 flat = qid * QUEUE_SIZE + (tail & QUEUE_MASK);
-  if (bpf_map_update_elem(EBPF_INFO.queue_map_fd, &flat, &val, BPF_ANY) != 0) {
-    return -1;
-  }
-
-  tail++;
-  bpf_map_update_elem(EBPF_INFO.tail_map_fd, &qid, &tail, BPF_ANY);
-  return 0;
-}
-
-/* Dequeue from queue `qid` into `*out`. Returns 0 on success, -1 if empty. */
-static int queue_dequeue(__u32 qid, packet_info *out) {
-  __u32 head = 0, tail = 0;
-
-  if (bpf_map_lookup_elem(EBPF_INFO.head_map_fd, &qid, &head) != 0) {
-    return -1; // Queue doesn't exist
-  }
-
-  if (bpf_map_lookup_elem(EBPF_INFO.tail_map_fd, &qid, &tail) != 0) {
-    return -1; // Queue doesn't exist
-  }
-
-  if ((head & QUEUE_MASK) == (tail & QUEUE_MASK)) {
-    return -1; // Queue empty
-  }
-
-  __u32 flat = qid * QUEUE_SIZE + (head & QUEUE_MASK);
-  if (bpf_map_lookup_elem(EBPF_INFO.queue_map_fd, &flat, out) != 0) {
-    return -1;
-  }
-
-  head++;
-  bpf_map_update_elem(EBPF_INFO.head_map_fd, &qid, &head, BPF_ANY);
-  return 0;
-}
-
-int mpi_send_xdp(const void *buf, int count, MPI_Datatype datatype, int dest,
-                 int tag, packet_info *value) {
-  int size = datatype_size_in_bytes(count, datatype);
-  if (size < 1) {
-    return -1;
-  }
-
-  // Create message with tag header (same as regular mpi_send)
-  int payload_size = sizeof(int) + size;
-  void *message = malloc(payload_size);
-  if (!message) {
-    perror("malloc failed");
-    return -1;
-  }
-
-  // Add tag to message header
-  void *tag_send = message;
-  generic_hton(tag_send, &tag, sizeof(int), 1);
-
-  // Add data payload (same conversion logic as mpi_send)
-  void *buf_send = (char *)message + sizeof(int);
-  switch (datatype) {
-  case MPI_CHAR:
-    generic_hton(buf_send, buf, sizeof(char), count);
-    break;
-  case MPI_SIGNED_CHAR:
-    generic_hton(buf_send, buf, sizeof(signed char), count);
-    break;
-  case MPI_UNSIGNED_CHAR:
-    generic_hton(buf_send, buf, sizeof(unsigned char), count);
-    break;
-  case MPI_SHORT:
-    generic_hton(buf_send, buf, sizeof(short), count);
-    break;
-  case MPI_UNSIGNED_SHORT:
-    generic_hton(buf_send, buf, sizeof(unsigned short), count);
-    break;
-  case MPI_INT:
-    generic_hton(buf_send, buf, sizeof(int), count);
-    break;
-  case MPI_UNSIGNED:
-    generic_hton(buf_send, buf, sizeof(unsigned), count);
-    break;
-  case MPI_LONG:
-    generic_hton(buf_send, buf, sizeof(long), count);
-    break;
-  case MPI_UNSIGNED_LONG:
-    generic_hton(buf_send, buf, sizeof(unsigned long), count);
-    break;
-  case MPI_LONG_LONG:
-    generic_hton(buf_send, buf, sizeof(long long), count);
-    break;
-  case MPI_UNSIGNED_LONG_LONG:
-    generic_hton(buf_send, buf, sizeof(unsigned long long), count);
-    break;
-  case MPI_FLOAT:
-    generic_hton(buf_send, buf, sizeof(float), count);
-    break;
-  case MPI_DOUBLE:
-    generic_hton(buf_send, buf, sizeof(double), count);
-    break;
-  case MPI_LONG_DOUBLE:
-    generic_hton(buf_send, buf, sizeof(long double), count);
-    break;
-  case MPI_C_BOOL:
-    generic_hton(buf_send, buf, sizeof(bool), count);
-    break;
-  case MPI_WCHAR:
-    generic_hton(buf_send, buf, sizeof(wchar_t), count);
-    break;
-  default:
-    free(message);
-    return -1;
-  }
-
-  // Get socket info for the destination process
-  tuple_process key = {MPI_PROCESS->rank, dest};
-  socket_id socket_info = {0};
-
-  if (bpf_map_lookup_elem(EBPF_INFO.mpi_send_map_fd, &key, &socket_info) != 0) {
-    printf("Failed to lookup socket info for rank %d -> %d\n",
-           MPI_PROCESS->rank, dest);
-    free(message);
-    return -1;
-  }
-
-  // Extract MAC addresses from the packet_info value parameter
-  // Assuming you want to swap source and destination MAC addresses
-  uint8_t dst_mac[ETH_ALEN];
-  uint8_t src_mac[ETH_ALEN];
-
-  // Extract MAC addresses from ethernet header in packet_info
-  // Copy source MAC from packet_info as destination MAC for our packet
-  // memcpy(dst_mac, &value->eth_hdr[6],
-  //        ETH_ALEN); // Source MAC from received packet
-  // memset(dst_mac, 0xff,
-  //        ETH_ALEN); // Source MAC from received packet
-  // // Copy destination MAC from packet_info as source MAC for our packet
-  // memcpy(src_mac, &value->eth_hdr[0],
-  //        ETH_ALEN); // Dest MAC from received packet
-  // memset(src_mac, 0x00,
-  //        ETH_ALEN); // Dest MAC from received packet
-
-  // Build the complete packet
-  size_t eth_hdr_len = sizeof(struct ether_header);
-  size_t ip_hdr_len = sizeof(struct iphdr);
-  size_t udp_hdr_len = sizeof(struct udphdr);
-  size_t total_len = eth_hdr_len + ip_hdr_len + udp_hdr_len + payload_size;
-
-  uint8_t *packet = malloc(total_len);
-  if (!packet) {
-    free(message);
-    return -1;
-  }
-  memset(packet, 0, total_len);
-
-  // 1) Ethernet header
-  struct ether_header *eth = (struct ether_header *)packet;
-  eth->ether_type = htons(ETHERTYPE_IP);
-
-  // 2) IPv4 header
-  struct iphdr *ip = (struct iphdr *)(packet + eth_hdr_len);
-  ip->version = 4;
-  ip->ihl = ip_hdr_len / 4; // 5 words = 20 bytes
-  ip->tos = 0;
-  ip->tot_len = htons(ip_hdr_len + udp_hdr_len + payload_size);
-  ip->id = htons(0x1234);
-  ip->frag_off = htons(0x4000); // DF set
-  ip->ttl = 64;
-  ip->protocol = IPPROTO_UDP;
-  // if (socket_info.src_ip == 16777343) {
-
-  //   ip->saddr = 0; // use socket info from bpf map
-  // } else {
-  //   ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-  // }
-  // if (socket_info.dst_ip == 16777343) {
-
-  //   ip->daddr = 0; // use socket info from bpf map
-  // } else {
-  //   ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
-  // }
-  ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-  ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
-  if (socket_info.src_ip == socket_info.dst_ip) {
-
-    ip->saddr = 0; // use socket info from bpf map
-    ip->daddr = 0; // use socket info from bpf map
-    // ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-    // ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
-    memcpy(dst_mac, &value->eth_hdr[0],
-           ETH_ALEN); // Source MAC from received packet
-    memcpy(src_mac, &value->eth_hdr[6],
-           ETH_ALEN); // Dest MAC from received packet
+  // sleep(1);
+  if (rank == 0) {
+    // Root: send to next, then receive from prev
+    mpi_send(&dummy, 1, MPI_INT, next, tag);
+    mpi_recv(&dummy, 1, MPI_INT, prev, tag);
   } else {
-    // ip->saddr = socket_info.src_ip; // Use socket info from BPF map
-    // ip->daddr = socket_info.dst_ip; // Use socket info from BPF map
-    tag = -1 * tag;
-    memcpy(dst_mac, &value->eth_hdr[0],
-           ETH_ALEN); // Source MAC from received packet
-    memcpy(src_mac, &value->eth_hdr[6],
-           ETH_ALEN); // Dest MAC from received packet
-  }
-  memcpy(eth->ether_dhost, dst_mac, ETH_ALEN); // Use extracted dest MAC
-  memcpy(eth->ether_shost, src_mac, ETH_ALEN); // Use extracted source MAC
-  ip->check = 0;
-  ip->check = ip_checksum(ip, ip_hdr_len);
-
-  // 3) UDP header
-  struct udphdr *udp = (struct udphdr *)(packet + eth_hdr_len + ip_hdr_len);
-  udp->source = htons(socket_info.src_port);
-  udp->dest = htons(socket_info.dst_port);
-  udp->len = htons(udp_hdr_len + payload_size);
-  udp->check = 0; // UDP checksum is optional for IPv4
-
-  // 4) Copy MPI payload (tag + data)
-  memcpy(packet + eth_hdr_len + ip_hdr_len + udp_hdr_len, message,
-         payload_size);
-
-  // Now test the packet through XDP program
-  struct bpf_test_run_opts opts = {0};
-  opts.sz = sizeof(opts);
-  opts.flags = BPF_F_TEST_XDP_LIVE_FRAMES; // Don't use live frames for
-  // testing
-  // opts.flags = 0; // Don't use live frames for testing
-  opts.repeat = 0;
-  opts.duration = 0;
-  opts.cpu = 0;
-  opts.batch_size = 1;
-
-  // Provide the constructed packet as input
-  opts.data_in = packet;
-  opts.data_size_in = total_len;
-
-  // Buffer for output (XDP might modify the packet)
-  // uint8_t data_out[2048];
-  opts.data_out = NULL;
-  opts.data_size_out = 0;
-
-  // No context needed for this test
-  opts.ctx_in = NULL;
-  opts.ctx_out = NULL;
-  opts.ctx_size_in = 0;
-  opts.ctx_size_out = 0;
-  // DECLARE_LIBBPF_OPTS(
-  //     bpf_test_run_opts, opts, .data_in = packet, .data_size_in = total_len,
-  //     .ctx_in = NULL, .ctx_size_in = 0, .repeat = 1,
-  //     .flags = BPF_F_TEST_XDP_LIVE_FRAMES, .batch_size = 1, .cpu = 0);
-
-  printf("Testing XDP program with constructed packet (rank %d -> %d)...\n",
-         MPI_PROCESS->rank, dest);
-
-  int ret = bpf_prog_test_run_opts(EBPF_INFO.loader->prog_fd, &opts);
-  printf("bpf out: %d\n", opts.retval);
-  // int ret =
-  //     xdp_program__test_run(EBPF_INFO.loader->prog, &opts,
-  //     BPF_PROG_TEST_RUN);
-
-  if (ret < 0) {
-    fprintf(stderr, "bpf_prog_test_run_opts failed: %s\n", strerror(-ret));
-    free(message);
-    free(packet);
-    return -1;
+    // Others: receive from prev, then send to next
+    mpi_recv(&dummy, 1, MPI_INT, prev, tag);
+    mpi_send(&dummy, 1, MPI_INT, next, tag);
   }
 
-  printf("XDP program returned: %d, duration: %u ns\n", ret, opts.duration);
-
-  // Optionally, you could also send the packet via normal UDP socket
-  // as a fallback or for verification
-  // ssize_t sent =
-  //     sendto(udp_socket_fd, message, payload_size, 0,
-  //            (struct sockaddr *)&peer_addrs[dest], sizeof(struct
-  //            sockaddr_in));
-
-  // if (sent != payload_size) {
-  //   perror("sendto failed");
-  //   free(message);
-  //   free(packet);
-  //   return -1;
-  // }
-
-  free(message);
-  free(packet);
-  return count;
+  return 0;
 }
 
 int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
   int rank = MPI_PROCESS->rank;
   int size = WORD_SIZE;
-  packet_info recv_packet_info = {0};
 
   // Transform rank to [0..size) with root→0
   int rel = (rank - root + size) % size;
@@ -1681,7 +1733,8 @@ int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
           // Non-root processes use XDP-aware send
           // First, get packet info from previous receive
           printf("MY RANK :%d\n", MPI_PROCESS->rank);
-          mpi_send_xdp(buf, count, datatype, real_dst, tag, &recv_packet_info);
+          // mpi_send_xdp(buf, count, datatype, real_dst, tag,
+          // &recv_packet_info);
         }
       }
     } else if (rel < step * 2) {
@@ -1697,37 +1750,6 @@ int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
         if (err < 0) {
           printf("Error receiving from process %d\n", real_src);
           return -1;
-        }
-
-        // Try to get corresponding packet metadata from eBPF queue
-        int queue_result = queue_dequeue(rank, &recv_packet_info);
-        if (queue_result == 0) {
-          printf("Process %d: Got packet metadata from eBPF:\n", rank);
-          printf("  - Interface: %u\n", recv_packet_info.ingress_ifindex);
-          printf("  - Total length: %u bytes\n", recv_packet_info.total_len);
-          printf("  - Ethernet header: ");
-          for (int i = 0; i < 6; i++) {
-            printf("%02x:", recv_packet_info.eth_hdr[i]);
-          }
-          printf(" -> ");
-          for (int i = 6; i < 12; i++) {
-            printf("%02x:", recv_packet_info.eth_hdr[i]);
-          }
-          printf("\n");
-
-          // Extract IP header info
-          struct iphdr *ip = (struct iphdr *)recv_packet_info.ip_hdr;
-          struct in_addr src_addr = {.s_addr = ip->saddr};
-          struct in_addr dst_addr = {.s_addr = ip->daddr};
-          printf("  - IP: %s -> %s\n", inet_ntoa(src_addr),
-                 inet_ntoa(dst_addr));
-
-          // Extract UDP header info
-          struct udphdr *udp = (struct udphdr *)recv_packet_info.udp_hdr;
-          printf("  - UDP: %u -> %u\n", ntohs(udp->source), ntohs(udp->dest));
-        } else {
-          printf("Process %d: No packet metadata available in eBPF queue\n",
-                 rank);
         }
       }
     }
@@ -1744,179 +1766,1109 @@ int mpi_bcast_ring(void *buf, int count, MPI_Datatype datatype, int root) {
   int next = (rank + 1) % size;
   int prev = (rank - 1 + size) % size;
   int pred_root = (root - 1 + size) % size;
-  packet_info recv_info = {0};
 
   // 1) Root kicks off by sending to (root+1)%size
   if (rank == root) {
-    printf("Process %d (root) sending to %d\n", rank, next);
+    // printf("Process %d (root) sending to %d\n", rank, next);
     mpi_send(buf, count, datatype, next, tag);
   }
 
   // 2) Everyone except root must receive from their predecessor
   if (rank != root) {
-    printf("Process %d receiving from %d\n", rank, prev);
+    // printf("Process %d receiving from %d\n", rank, prev);
     if (mpi_recv(buf, count, datatype, prev, tag) < 0) {
       fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
       return -1;
     }
-
-    // (Optional) pull off XDP metadata if you’re using that path:
-    if (queue_dequeue(rank, &recv_info) == 0) {
-      // … inspect recv_info …
-    }
   }
 
   // 3) And everyone except the predecessor of root forwards to their “next”
-  //    This stops the packet from looping back to root.
+  //  This stops the packet from looping back to root.
   if (rank != pred_root) {
-    printf("Process %d forwarding to %d\n", rank, next);
+    // printf("Process %d forwarding to %d\n", rank, next);
     if (rank == root) {
       // root already used mpi_send above;
       // if you want XDP‐send for everyone, swap these two calls
     } else {
-      mpi_send_xdp(buf, count, datatype, next, tag, &recv_info);
-      // mpi_send(buf, count, datatype, next, tag);
+      // mpi_send_xdp(buf, count, datatype, next, tag, &recv_info);
+      mpi_send(buf, count, datatype, next, tag);
     }
   }
 
   return 0;
 }
 
-int mpi_bcast_ring_raw(void *buf, int count, MPI_Datatype datatype, int root) {
+int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
   int rank = MPI_PROCESS->rank;
   int size = WORD_SIZE;
   int tag = 1; // you can choose any tag
   int next = (rank + 1) % size;
   int prev = (rank - 1 + size) % size;
   int pred_root = (root - 1 + size) % size;
-  packet_info recv_info = {0};
 
   // 1) Root kicks off by sending to (root+1)%size
   if (rank == root) {
-    printf("Process %d (root) sending to %d\n", rank, next);
-    mpi_send(buf, count, datatype, next, tag);
-    // usleep(100000); // 100ms delay
-    // sleep(2);
+    // printf("Process %d (root) sending to %d\n", rank, next);
+    __mpi_send(buf, count, datatype, root, next, tag, MPI_BCAST);
   }
 
   // 2) Everyone except root must receive from their predecessor
   if (rank != root) {
-    printf("Process %d receiving from %d\n", rank, prev);
+    // printf("Process %d receiving from %d\n", rank, prev);
     if (mpi_recv(buf, count, datatype, prev, tag) < 0) {
       fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
       return -1;
-    }
-
-    // (Optional) pull off XDP metadata if you’re using that path:
-    if (queue_dequeue(rank, &recv_info) == 0) {
-      // … inspect recv_info …
-    }
-  }
-
-  // 3) And everyone except the predecessor of root forwards to their “next”
-  //    This stops the packet from looping back to root.
-  if (rank != pred_root) {
-    printf("Process %d forwarding to %d\n", rank, next);
-    if (rank == root) {
-      // root already used mpi_send above;
-      // if you want XDP‐send for everyone, swap these two calls
-    } else {
-      mpi_send_raw(buf, count, datatype, next, 2, &recv_info);
-      // mpi_send_raw_blanch_v2(next, MPI_BCAST, datatype, tag);
-      // usleep(100000); // 100ms delay
-      // sleep(2);
-      // mpi_send_xdp(buf, count, datatype, next, 2, &recv_info);
-      // mpi_send(buf, count, datatype, next, 2);
     }
   }
 
   return 0;
 }
 
-int mpi_bcast_raw_raw(void *buf, int count, MPI_Datatype datatype, int root) {
+int mpi_opcode(void *buf, void *buf_local, size_t len, MPI_Datatype datatype,
+               MPI_Opcode opcode) {
+  switch (datatype) {
+  case MPI_CHAR: {
+    char *__buf = (char *)buf;
+    char *__buf_local = (char *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_SIGNED_CHAR: {
+    signed char *__buf = (signed char *)buf;
+    signed char *__buf_local = (signed char *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_UNSIGNED_CHAR: {
+    unsigned char *__buf = (unsigned char *)buf;
+    unsigned char *__buf_local = (unsigned char *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_SHORT: {
+    short *__buf = (short *)buf;
+    short *__buf_local = (short *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_UNSIGNED_SHORT: {
+    unsigned short *__buf = (unsigned short *)buf;
+    unsigned short *__buf_local = (unsigned short *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_INT: {
+    int *__buf = (int *)buf;
+    int *__buf_local = (int *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_UNSIGNED: {
+    unsigned *__buf = (unsigned *)buf;
+    unsigned *__buf_local = (unsigned *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_LONG: {
+    long *__buf = (long *)buf;
+    long *__buf_local = (long *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_UNSIGNED_LONG: {
+    unsigned long *__buf = (unsigned long *)buf;
+    unsigned long *__buf_local = (unsigned long *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_LONG_LONG: {
+    long long *__buf = (long long *)buf;
+    long long *__buf_local = (long long *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_UNSIGNED_LONG_LONG: {
+    unsigned long long *__buf = (unsigned long long *)buf;
+    unsigned long long *__buf_local = (unsigned long long *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_FLOAT: {
+    float *__buf = (float *)buf;
+    float *__buf_local = (float *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_DOUBLE: {
+    double *__buf = (double *)buf;
+    double *__buf_local = (double *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_LONG_DOUBLE: {
+    long double *__buf = (long double *)buf;
+    long double *__buf_local = (long double *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_C_BOOL: {
+    bool *__buf = (bool *)buf;
+    bool *__buf_local = (bool *)buf_local;
+    switch (opcode) {
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  case MPI_WCHAR: {
+    wchar_t *__buf = (wchar_t *)buf;
+    wchar_t *__buf_local = (wchar_t *)buf_local;
+    switch (opcode) {
+    case MPI_SUM: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] += __buf_local[i];
+      }
+    } break;
+    case MPI_PROD: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] *= __buf_local[i];
+      }
+    } break;
+    case MPI_MAX: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] > __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_MIN: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf_local[i] < __buf[i] ? __buf_local[i] : __buf[i];
+      }
+    } break;
+    case MPI_LAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] && __buf_local[i];
+      }
+    } break;
+    case MPI_LOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] || __buf_local[i];
+      }
+    } break;
+    case MPI_LXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] != __buf_local[i];
+      }
+    } break;
+    case MPI_BAND: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] & __buf_local[i];
+      }
+    } break;
+    case MPI_BOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] | __buf_local[i];
+      }
+    } break;
+    case MPI_BXOR: {
+      for (size_t i = 0; i < len; i++) {
+        __buf[i] = __buf[i] ^ __buf_local[i];
+      }
+    } break;
+    default:
+      perror("unsuport operation with this tipe");
+      exit(EXIT_FAILURE);
+      break;
+    }
+  } break;
+  default:
+    return -1;
+  }
+  return 0;
+}
+
+int mpi_reduce_ring(void *buf, int count, MPI_Datatype datatype,
+                    MPI_Opcode opcode, int root) {
   int rank = MPI_PROCESS->rank;
   int size = WORD_SIZE;
-  packet_info recv_packet_info = {0};
+  int tag = 1; // you can choose any tag
+  int next = (rank + 1) % size;
+  int prev = (rank - 1 + size) % size;
+  // int pred_root = (root - 1 + size) % size;
 
-  // Transform rank to [0..size) with root→0
-  int rel = (rank - root + size) % size;
-  // int max_rounds = (int)log2(size);
+  // 1) Root kicks off by sending to (root+1)%size
+  if (rank != root) {
+    // printf("Process %d receiving from %d\n", rank, prev);
+    __mpi_send(buf, count, datatype, root, root, tag, MPI_REDUCE);
+  }
 
-  printf("Process %d starting broadcast (root=%d, rel=%d)\n", rank, root, rel);
-
-  // log₂(size) rounds
-  for (int step = 1, round = 0; step < size; step <<= 1, ++round) {
-    int tag = 1; // unique tag for this round
-
-    if (rel < step) {
-      // Sender phase
-      int dst = rel + step;
-      if (dst < size) {
-        int real_dst = (dst + root) % size;
-        printf("Process %d sending to %d (round %d)\n", rank, real_dst, round);
-
-        if (rank == root) {
-          // Root uses regular UDP send
-          mpi_send(buf, count, datatype, real_dst, tag);
-          usleep(100000); // 100ms delay
-        } else {
-          // Non-root processes use XDP-aware send
-          // First, get packet info from previous receive
-          printf("MY RANK :%d\n", MPI_PROCESS->rank);
-          mpi_send_raw_blanch_v2(real_dst, MPI_BCAST, datatype, tag);
-          usleep(100000); // 100ms delay
-        }
-      }
-    } else if (rel < step * 2) {
-      // Receiver phase
-      int src = rel - step;
-      if (src >= 0) {
-        int real_src = (src + root) % size;
-        printf("Process %d receiving from %d (round %d)\n", rank, real_src,
-               round);
-
-        // Receive the actual MPI data
-        int err = mpi_recv(buf, count, datatype, real_src, tag);
-        if (err < 0) {
-          printf("Error receiving from process %d\n", real_src);
+  // 2) Everyone except root must receive from their predecessor
+  if (rank == root) {
+    for (size_t i = 0; i < size - 1; i++) {
+      // printf("Process %d (root) sending to %d\n", rank, root);
+      switch (datatype) {
+      case MPI_CHAR: {
+        char buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
           return -1;
         }
-
-        // Try to get corresponding packet metadata from eBPF queue
-        // int queue_result = queue_dequeue(rank, &recv_packet_info);
-        // if (queue_result == 0) {
-        //   printf("Process %d: Got packet metadata from eBPF:\n", rank);
-        //   printf("  - Interface: %u\n", recv_packet_info.ingress_ifindex);
-        //   printf("  - Total length: %u bytes\n", recv_packet_info.total_len);
-        //   printf("  - Ethernet header: ");
-        //   for (int i = 0; i < 6; i++) {
-        //     printf("%02x:", recv_packet_info.eth_hdr[i]);
-        //   }
-        //   printf(" -> ");
-        //   for (int i = 6; i < 12; i++) {
-        //     printf("%02x:", recv_packet_info.eth_hdr[i]);
-        //   }
-        //   printf("\n");
-
-        //   // Extract IP header info
-        //   struct iphdr *ip = (struct iphdr *)recv_packet_info.ip_hdr;
-        //   struct in_addr src_addr = {.s_addr = ip->saddr};
-        //   struct in_addr dst_addr = {.s_addr = ip->daddr};
-        //   printf("  - IP: %s -> %s\n", inet_ntoa(src_addr),
-        //          inet_ntoa(dst_addr));
-
-        //   // Extract UDP header info
-        //   struct udphdr *udp = (struct udphdr *)recv_packet_info.udp_hdr;
-        //   printf("  - UDP: %u -> %u\n", ntohs(udp->source),
-        //   ntohs(udp->dest));
-        // } else {
-        //   printf("Process %d: No packet metadata available in eBPF queue\n",
-        //          rank);
-        // }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_SIGNED_CHAR: {
+        signed char buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_UNSIGNED_CHAR: {
+        unsigned char buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_SHORT: {
+        short buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_UNSIGNED_SHORT: {
+        unsigned short buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_INT: {
+        int buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_UNSIGNED: {
+        unsigned buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_LONG: {
+        long buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_UNSIGNED_LONG: {
+        unsigned long buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_LONG_LONG: {
+        long long buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_UNSIGNED_LONG_LONG: {
+        unsigned long long buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_FLOAT: {
+        float buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_DOUBLE: {
+        double buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_LONG_DOUBLE: {
+        long double buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_C_BOOL: {
+        bool buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      case MPI_WCHAR: {
+        wchar_t buf_local[count];
+        if (mpi_recv(buf_local, count, datatype, MPI_ANY_SOURCE, tag) < 0) {
+          fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+          return -1;
+        }
+        if (mpi_opcode(buf, buf_local, count, datatype, opcode) != 0) {
+          perror("error mpi_opcode\n");
+          exit(EXIT_FAILURE);
+        }
+      } break;
+      default:
+        return -1;
       }
     }
   }
 
-  printf("Process %d completed broadcast\n", rank);
   return 0;
 }
