@@ -336,17 +336,10 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
   if (total_size > 1472) {
     size_t offset = 0;
     const size_t N = (size_t)ceil((double)total_size / (double)1472);
-    size_t base = (size_t)ceil((double)total_size / (double)N);
+    size_t base = (size_t)ceil((double)size / (double)N);
+    size_t base_and_head = (size_t)ceil((double)total_size / (double)N);
     size_t chunk = bytes_size_in_unit(base, datatype);
-    size_t chunk_headless =
-        chunk -
-        ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-         sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
     size_t chunk_rem = bytes_size_in_unit(base + 1, datatype);
-    size_t chunk_rem_headless =
-        chunk_rem -
-        ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-         sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
     size_t rem = total_size % N;
     // printf("send base: %lu chunk:%d chunk+:%d rem:%lu\n", base, chunk,
     //        chunk_rem, rem);
@@ -381,7 +374,7 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       void *len_send = (char *)message + (sizeof(char) * 4) +
                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
                        sizeof(MPI_Datatype);
-      generic_hton(len_send, &chunk_rem_headless, sizeof(int), 1);
+      generic_hton(len_send, &chunk_rem, sizeof(int), 1);
 
       // Add tag to message header
       void *tag_send = (char *)message + (sizeof(char) * 4) +
@@ -406,6 +399,7 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       case MPI_CHAR:
         bufptr = (void *)((char *)buf + offset);
         generic_hton(buf_send, bufptr, sizeof(char), chunk_rem);
+        // printf("rank: %d len: %d\n", MPI_PROCESS->rank, strlen(buf_send));
         break;
       case MPI_SIGNED_CHAR:
         bufptr = (void *)((signed char *)buf + offset);
@@ -473,18 +467,18 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       }
 
       // Send UDP message using the global socket and peer address table
-      ssize_t sent = sendto(udp_socket_fd, message, base + 1, 0,
+      ssize_t sent = sendto(udp_socket_fd, message, base + 1 + MPI_HEADER, 0,
                             (struct sockaddr *)&peer_addrs[dest],
                             sizeof(struct sockaddr_in));
 
       free(message);
 
-      if (sent != (base + 1)) {
+      if (sent != (MPI_HEADER + base + 1)) {
         perror("sendto failed");
         return -1;
       }
       seq += 1;
-      offset += chunk_rem_headless;
+      offset += chunk_rem;
     }
     for (size_t i = 0; i < (N - rem); i++) {
       void *message = malloc(total_size);
@@ -517,7 +511,7 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       void *len_send = (char *)message + (sizeof(char) * 4) +
                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
                        sizeof(MPI_Datatype);
-      generic_hton(len_send, &chunk_headless, sizeof(int), 1);
+      generic_hton(len_send, &chunk, sizeof(int), 1);
 
       // Add tag to message header
       void *tag_send = (char *)message + (sizeof(char) * 4) +
@@ -542,6 +536,7 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       case MPI_CHAR: {
         bufptr = (void *)((char *)buf + offset);
         generic_hton(buf_send, bufptr, sizeof(char), chunk);
+        // printf("rank: %d len: %d\n", MPI_PROCESS->rank, strlen(bufptr));
       } break;
       case MPI_SIGNED_CHAR: {
         bufptr = (void *)((signed char *)buf + offset);
@@ -609,18 +604,19 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       }
 
       // Send UDP message using the global socket and peer address table
-      ssize_t sent = sendto(udp_socket_fd, message, base, 0,
+      ssize_t sent = sendto(udp_socket_fd, message, base + MPI_HEADER, 0,
                             (struct sockaddr *)&peer_addrs[dest],
                             sizeof(struct sockaddr_in));
+      // printf("rank: %d send: %d\n", MPI_PROCESS->rank, sent);
 
       free(message);
 
-      if (sent != base) {
+      if (sent != (MPI_HEADER + base)) {
         perror("sendto failed");
         return -1;
       }
       seq += 1;
-      offset += chunk_headless;
+      offset += chunk;
     }
   } else {
     void *message = malloc(total_size);
@@ -881,18 +877,10 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
   if (total_size > 1472) {
     size_t offset = 0;
     const size_t N = ceil((double)total_size / (double)1472);
-    size_t base = (size_t)ceil((double)total_size / (double)N);
+    size_t base = (size_t)ceil((double)size / (double)N);
     size_t base_rem = base + 1;
     size_t chunk = bytes_size_in_unit(base, datatype);
-    size_t chunk_headless =
-        chunk -
-        ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-         sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
     size_t chunk_rem = bytes_size_in_unit(base + 1, datatype);
-    size_t chunk_rem_headless =
-        chunk_rem -
-        ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-         sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
     size_t rem = total_size % N;
     unsigned long seqs[N];
     memset(seqs, 0, N);
@@ -981,28 +969,30 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
           ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
            sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
 
-      // printf("rank: %d datasize: %d\n", MPI_PROCESS->rank, data_size);
-      size_t base_headless =
-          base -
-          ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
-      size_t base_rem_headless =
-          (base_rem) -
-          ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+      // printf("rank: %d datasize: %d, received: %d\n", MPI_PROCESS->rank,
+      //        data_size, received);
+      // size_t base_headless =
+      //     base -
+      //     ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+      //      sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+      // size_t base_rem_headless =
+      //     (base_rem) -
+      //     ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+      //      sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
 
-      if (data_size != base_headless && data_size != base_rem_headless) {
-        free(message);
-        printf("received data size mismatch:: 1\n");
-        exit(EXIT_FAILURE);
-        // }
-      }
+      // if (data_size != base_headless && data_size != base_rem_headless) {
+      //   free(message);
+      //   printf("received data size mismatch:: 1\n");
+      //   exit(EXIT_FAILURE);
+      //   // }
+      // }
       fragment[seq].len = len;
       fragment[seq].arr = malloc(datatype_size_in_bytes(len, datatype));
       switch (datatype) {
       case MPI_CHAR: {
         generic_ntoh(fragment[seq].arr, buf_recv, sizeof(char),
                      fragment[i].len);
+        // printf("rank: %d, len: %d\n", MPI_PROCESS->rank, strlen(buf_recv));
         // char *buf_char = (char *)buf;
         // buf_char[count - 1] = '\0';
       } break;
@@ -1085,11 +1075,14 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
       case MPI_CHAR: {
         bufptr = (void *)((char *)buf + offset);
         generic_ntoh(bufptr, fragment[i].arr, sizeof(char), fragment[i].len);
+        // memcpy(bufptr, fragment[i].arr, fragment[i].len);
         char *buf_char = (char *)buf;
         buf_char[count - 1] = '\0';
         // printf("rank: %d 0\n%s\n", MPI_PROCESS->rank, (char *)bufptr);
-        // printf("1. rank: %d  char: %s seq: %lu buf: %p bufptr: %p\n",
-        //        MPI_PROCESS->rank, ((char *)fragment[i].arr), i, buf, bufptr);
+        // printf("1. rank: %d  char: %s seq: %lu buf: %p bufptr: %p len: %lu "
+        //        "offset: %d len__: %d\n",
+        //        MPI_PROCESS->rank, ((char *)fragment[i].arr), i, buf, bufptr,
+        //        fragment[i].len, offset, strlen(fragment[i].arr));
         // print_mpi_message(buf_recv, chunk, MPI_CHAR);
       } break;
       case MPI_SIGNED_CHAR: {

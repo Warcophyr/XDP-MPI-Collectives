@@ -174,34 +174,37 @@ int main(int argc, char *argv[]) {
 
   // 1440 bytes upperbound befor fragment the message see __mpi_send to see the
   // real upperbound 1472 bytes it is time to implement releability message
+  char m[] = "ciao";
   char z[] =
-      "meccaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      "aaaaaaaaa";
-  const size_t N = 1450;
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      "AAAAAAAAA";
+  // printf("z: %d\n", strlen(z));
+  const size_t N = 1451;
   char y[N];
   for (int i = 0; i < N; i++) {
     y[i] = 'a'; // set each element to 'a'
   }
   y[N - 1] = '\0';
+  // printf("y: %d\n", strlen(y));
   for (int rank = 0; rank < WORD_SIZE; rank++) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -225,16 +228,21 @@ int main(int argc, char *argv[]) {
         x[6] = 8;
         x[7] = 9;
         // mpi_send(x, sizeof(x) / sizeof(int), MPI_INT, 0, 2);
-        y[0] = 'm';
-        y[1] = 'e';
-        y[2] = 'c';
-        y[3] = 'c';
+        // y[0] = 'm';
+        // y[1] = 'e';
+        // y[2] = 'c';
+        // y[3] = 'c';
+        for (size_t i = 0; i < N - 1; i++) {
+          y[i] = 'A';
+        }
+        y[N - 2] = 'E';
+
         // mpi_send_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 0, 2, &value);
         // mpi_send_raw(&x, sizeof(x), MPI_INT, 0, 2, &value);
         // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
         // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
 
-        // mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
+        mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
 
         // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
         // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
@@ -243,11 +251,11 @@ int main(int argc, char *argv[]) {
         // mpi_send_raw_blanch_v2(2, MPI_BCAST, MPI_INT, 9);
         // mpi_send_raw_blanch_v2(3, MPI_BCAST, MPI_INT, 9);
       }
-      // if (MPI_PROCESS->rank == 0) {
+      if (MPI_PROCESS->rank == 0) {
 
-      //   // TODO: implement ritrasmission in case of lost packet
-      //   mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
-      // }
+        // TODO: implement ritrasmission in case of lost packet
+        mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
+      }
       // if (MPI_PROCESS->rank == 2) {
       //   mpi_recv(x, sizeof(x) / sizeof(int), MPI_INT, 1, 2);
       //   // mpi_send_raw_blanch_v2(3, MPI_BCAST, MPI_INT, 9);
@@ -257,7 +265,7 @@ int main(int argc, char *argv[]) {
       // }
       fflush(stdout);
       // mpi_bcast_ring(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
-      mpi_bcast_ring_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
+      // mpi_bcast_ring_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
       // // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
       // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
       // mpi_reduce_ring(&x, sizeof(x) / sizeof(int), MPI_INT, MPI_SUM, 1);
@@ -269,21 +277,21 @@ int main(int argc, char *argv[]) {
       // if (MPI_PROCESS->rank == 0) {
       //   printf("end: %lf\n", ttotalend);
       // }
-      for (int i = 0; i < WORD_SIZE; i++) {
-        wait(NULL); // wait for each child to finish
-      }
-      for (size_t r = 0; r < WORD_SIZE; r++) {
-        // mpi_barrier_ring();
-        if (MPI_PROCESS->rank == r) {
-          printf("Rank: %d: \n", MPI_PROCESS->rank);
-          for (size_t i = 0; i < (sizeof(x) / sizeof(int)) - 1; i++) {
-            printf("%d ", x[i]);
-          }
-          printf("\n");
-          fflush(stdout);
-        }
-        // mpi_barrier_ring();
-      }
+      // for (int i = 0; i < WORD_SIZE; i++) {
+      //   wait(NULL); // wait for each child to finish
+      // }
+      // for (size_t r = 0; r < WORD_SIZE; r++) {
+      //   // mpi_barrier_ring();
+      //   if (MPI_PROCESS->rank == r) {
+      //     printf("Rank: %d: \n", MPI_PROCESS->rank);
+      //     for (size_t i = 0; i < (sizeof(x) / sizeof(int)) - 1; i++) {
+      //       printf("%d ", x[i]);
+      //     }
+      //     printf("\n");
+      //     fflush(stdout);
+      //   }
+      //   // mpi_barrier_ring();
+      // }
       // mpi_barrier_ring();
       // for (size_t r = 0; r < WORD_SIZE; r++) {
       //   // mpi_barrier_ring();
@@ -294,11 +302,11 @@ int main(int argc, char *argv[]) {
       //   }
       //   // mpi_barrier_ring();
       // }
-      // if (MPI_PROCESS->rank == 0) {
-      //   printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
-      //   printf("\n");
-      //   fflush(stdout);
-      // }
+      if (MPI_PROCESS->rank == 0) {
+        printf("Rank: %d: len: %d \n%s\n", MPI_PROCESS->rank, strlen(y), y);
+        printf("\n");
+        fflush(stdout);
+      }
       // for (int i = 0; i < WORD_SIZE; i++) {
       //   wait(NULL); // wait for each child to finish
       // }
@@ -330,7 +338,7 @@ int main(int argc, char *argv[]) {
 
   while (wait(NULL) > 0)
     ;
-  pause();
+  // pause();
   ebpf_loader_cleanup(&loader);
   return EXIT_SUCCESS;
 }
