@@ -54,21 +54,22 @@ int main() {
   //   printf("Received number: %d\n", buffer[i]);
   // }
 
-  printf("1 Receiver listening on port %d...\n", PORT1);
+  // printf("1 Receiver listening on port %d...\n", PORT1);
 
   // Receive one message
-  n = recvfrom(sockfd, &number, sizeof(number), 0, (struct sockaddr *)&cliaddr,
-               &len);
-  if (n < 0) {
-    perror("recvfrom");
-    close(sockfd);
-    exit(EXIT_FAILURE);
-  }
+  // n = recvfrom(sockfd, &number, sizeof(number), 0, (struct sockaddr
+  // *)&cliaddr,
+  //              &len);
+  // if (n < 0) {
+  //   perror("recvfrom");
+  //   close(sockfd);
+  //   exit(EXIT_FAILURE);
+  // }
 
-  //   buffer[n] = '\0'; // Null terminate
-  //   printf("Received: %s\n", buffer);
-  number = ntohl(number);
-  printf("1 Received number: %d\n", number);
+  // //   buffer[n] = '\0'; // Null terminate
+  // //   printf("Received: %s\n", buffer);
+  // number = ntohl(number);
+  // printf("1 Received number: %d\n", number);
   // for (int i = 0; i < 7; i++) {
   //   printf("Received number: %d\n", buffer[i]);
   // }
