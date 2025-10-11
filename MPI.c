@@ -217,7 +217,7 @@ int main(int argc, char *argv[]) {
       // if (MPI_PROCESS->rank == 0) {
       //   printf("start: %lf\n", ttotal);
       // }
-      if (MPI_PROCESS->rank == 1) {
+      if (MPI_PROCESS->rank == 7) {
 
         x[0] = 2;
         x[1] = 3;
@@ -242,7 +242,7 @@ int main(int argc, char *argv[]) {
         // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
         // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
 
-        mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
+        // mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
 
         // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
         // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
@@ -251,11 +251,11 @@ int main(int argc, char *argv[]) {
         // mpi_send_raw_blanch_v2(2, MPI_BCAST, MPI_INT, 9);
         // mpi_send_raw_blanch_v2(3, MPI_BCAST, MPI_INT, 9);
       }
-      if (MPI_PROCESS->rank == 0) {
+      // if (MPI_PROCESS->rank == 0) {
 
-        // TODO: implement ritrasmission in case of lost packet
-        mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
-      }
+      //   // TODO: implement ritrasmission in case of lost packet
+      //   mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
+      // }
       // if (MPI_PROCESS->rank == 2) {
       //   mpi_recv(x, sizeof(x) / sizeof(int), MPI_INT, 1, 2);
       //   // mpi_send_raw_blanch_v2(3, MPI_BCAST, MPI_INT, 9);
@@ -265,9 +265,11 @@ int main(int argc, char *argv[]) {
       // }
       fflush(stdout);
       // mpi_bcast_ring(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
+      // mpi_bcast_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 6);
       // mpi_bcast_ring_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
       // // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
-      // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
+      mpi_bcast_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 7);
+      // mpi_bcast(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
       // mpi_reduce_ring(&x, sizeof(x) / sizeof(int), MPI_INT, MPI_SUM, 1);
       // mpi_bcast_ring_raw(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
       // mpi_barrier();
@@ -293,20 +295,20 @@ int main(int argc, char *argv[]) {
       //   // mpi_barrier_ring();
       // }
       // mpi_barrier_ring();
-      // for (size_t r = 0; r < WORD_SIZE; r++) {
-      //   // mpi_barrier_ring();
-      //   if (MPI_PROCESS->rank == r) {
-      //     printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
-      //     printf("\n");
-      //     fflush(stdout);
-      //   }
-      //   // mpi_barrier_ring();
-      // }
-      if (MPI_PROCESS->rank == 0) {
-        printf("Rank: %d: len: %d \n%s\n", MPI_PROCESS->rank, strlen(y), y);
-        printf("\n");
-        fflush(stdout);
+      for (size_t r = 0; r < WORD_SIZE; r++) {
+        // mpi_barrier_ring();
+        if (MPI_PROCESS->rank == r) {
+          printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
+          printf("\n");
+          fflush(stdout);
+        }
+        // mpi_barrier_ring();
       }
+      // if (MPI_PROCESS->rank == 0) {
+      //   printf("Rank: %d: len: %d \n%s\n", MPI_PROCESS->rank, strlen(y), y);
+      //   printf("\n");
+      //   fflush(stdout);
+      // }
       // for (int i = 0; i < WORD_SIZE; i++) {
       //   wait(NULL); // wait for each child to finish
       // }

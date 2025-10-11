@@ -980,12 +980,11 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
       //     ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
       //      sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
 
-      // if (data_size != base_headless && data_size != base_rem_headless) {
-      //   free(message);
-      //   printf("received data size mismatch:: 1\n");
-      //   exit(EXIT_FAILURE);
-      //   // }
-      // }
+      if (data_size != base && data_size != base_rem) {
+        free(message);
+        printf("rank:%d  received data size mismatch:: 1\n", MPI_PROCESS->rank);
+        exit(EXIT_FAILURE);
+      }
       fragment[seq].len = len;
       fragment[seq].arr = malloc(datatype_size_in_bytes(len, datatype));
       switch (datatype) {
@@ -1392,7 +1391,8 @@ int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
   int rel = (rank - root + size) % size;
   // int max_rounds = (int)log2(size);
 
-  printf("Process %d starting broadcast (root=%d, rel=%d)\n", rank, root, rel);
+  // printf("Process %d starting broadcast (root=%d, rel=%d)\n", rank, root,
+  // rel);
 
   // log₂(size) rounds
   for (int step = 1, round = 0; step < size; step <<= 1, ++round) {
@@ -1403,7 +1403,8 @@ int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
       int dst = rel + step;
       if (dst < size) {
         int real_dst = (dst + root) % size;
-        printf("Process %d sending to %d (round %d)\n", rank, real_dst, round);
+        // printf("Process %d sending to %d (round %d)\n", rank, real_dst,
+        // round);
 
         if (rank == root) {
           // Root uses regular UDP send
@@ -1411,9 +1412,8 @@ int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
         } else {
           // Non-root processes use XDP-aware send
           // First, get packet info from previous receive
-          printf("MY RANK :%d\n", MPI_PROCESS->rank);
-          // mpi_send_xdp(buf, count, datatype, real_dst, tag,
-          // &recv_packet_info);
+          // printf("MY RANK :%d\n", MPI_PROCESS->rank);
+          mpi_send(buf, count, datatype, real_dst, tag);
         }
       }
     } else if (rel < step * 2) {
@@ -1421,8 +1421,8 @@ int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
       int src = rel - step;
       if (src >= 0) {
         int real_src = (src + root) % size;
-        printf("Process %d receiving from %d (round %d)\n", rank, real_src,
-               round);
+        // printf("Process %d receiving from %d (round %d)\n", rank, real_src,
+        //        round);
 
         // Receive the actual MPI data
         int err = mpi_recv(buf, count, datatype, real_src, tag);
@@ -1434,7 +1434,40 @@ int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
     }
   }
 
-  printf("Process %d completed broadcast\n", rank);
+  // printf("Process %d completed broadcast\n", rank);
+  return 0;
+}
+int mpi_bcast_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
+  int rank = MPI_PROCESS->rank;
+  int size = WORD_SIZE;
+  int tag = 1; // you can choose any tag
+  int dst_one = ((2 * rank) + 1) % size;
+  int dst_two = ((2 * rank) + 2) % size;
+  int src = (rank - 2 + size) % size;
+
+  // 1) Root kicks off by sending to (root+1)%size
+  if (rank == root) {
+    // printf("Process %d (root) sending to %d\n", rank, next);
+    // if (root <= (size / 2)) {
+    __mpi_send(buf, count, datatype, root, dst_one, tag, MPI_BCAST);
+    // __mpi_send(buf, count, datatype, root, dst_one, tag, MPI_SEND);
+    __mpi_send(buf, count, datatype, root, dst_two, tag, MPI_BCAST);
+    __mpi_send(buf, count, datatype, root, size - 1, tag, MPI_SEND);
+    // __mpi_send(buf, count, datatype, root, dst_two, tag, MPI_SEND);
+    // } else {
+    //   __mpi_send(buf, count, datatype, root, 0, tag, MPI_BCAST);
+    // }
+  }
+
+  // 2) Everyone except root must receive from their predecessor
+  if (rank != root) {
+    // printf("Process %d receiving from %d\n", rank, prev)
+    if (mpi_recv(buf, count, datatype, src, tag) < 0) {
+      fprintf(stderr, "Process %d: recv from %d failed\n", rank, src);
+      return -1;
+    }
+  }
+
   return 0;
 }
 

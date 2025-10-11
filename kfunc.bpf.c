@@ -97,7 +97,7 @@ static __always_inline __u16 ip_checksum_xdp(struct iphdr *ip) {
 
   return bpf_htons(~sum);
 }
-int __src = 0;
+// int __src_host = 0;
 
 SEC("xdp")
 int kfunc(struct xdp_md *ctx) {
@@ -183,7 +183,7 @@ int kfunc(struct xdp_md *ctx) {
     void *src_payload = (char *)payload + (sizeof(char) * 4) + sizeof(int);
     __builtin_memcpy(&src, src_payload, sizeof(int));
     int src_host = bpf_ntohl(src);
-    __src = src_host;
+    // __src_host = src_host;
 
     int dst;
     void *dst_payload =
@@ -224,13 +224,11 @@ int kfunc(struct xdp_md *ctx) {
     __builtin_memcpy(&seq, seq_payload, sizeof(unsigned long));
     unsigned long seq_host = bpf_ntohl(seq);
 
-    // bpf_printk("root: %d, src: %d, dst: %d, opcode: %d, datatype: %d,
-    //                len : %
-    //                d,
-    //            "
-    //            "tag: %d seq: %lu",
-    //            root_host, src_host, dst_host, opcode_host, datatype_host,
-    //            len_host, tag_host, seq_host);
+    // bpf_printk(
+    //     "CASE 1 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
+    //     "%d, tag: %d seq: %lu",
+    //     root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
+    //     tag_host, seq_host);
 
     switch (opcode_host) {
     case MPI_SEND:
@@ -246,17 +244,33 @@ int kfunc(struct xdp_md *ctx) {
           __builtin_memcpy(&iter_copy, data_meta, sizeof(iter_copy));
           // bpf_printk("num_copy: %d", num_copy);
           int key_num_process = 0;
-          int *size = bpf_map_lookup_elem(&num_process, &key_num_process);
-          if (size) {
+          int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
+          if (size_ptr) {
+            int size = *size_ptr;
             if (iter_copy == 0) {
+              bpf_printk(
+                  "CASE 0 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
+                  "datatype: %d, len : "
+                  "%d, tag: %d seq: %lu",
+                  iter_copy, root_host, src_host, dst_host, opcode_host,
+                  datatype_host, len_host, tag_host, seq_host);
               return XDP_CLONE_PASS(2);
             }
+            bpf_printk(
+                "CASE 1 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
+                "datatype: %d, len : "
+                "%d, tag: %d seq: %lu",
+                iter_copy, root_host, src_host, dst_host, opcode_host,
+                datatype_host, len_host, tag_host, seq_host);
             // bpf_printk("size: %d", *size);
             // int next = (int)(((unsigned)(dst_host + 1)) %
             // ((unsigned)(*size)));
+            // if (src_host > (int)((unsigned int)size / 2)) {
+            //   return XDP_DROP;
+            // }
             int next =
-                (int)(((unsigned)((2 * src_host) + 1)) % ((unsigned)(*size)));
-            if (root_host == next) {
+                (int)(((unsigned)((2 * dst_host) + 1)) % ((unsigned)(size)));
+            if (next == (size - 1)) {
               return XDP_DROP;
             }
             tuple_process inter_dest = {0};
@@ -274,6 +288,7 @@ int kfunc(struct xdp_md *ctx) {
 
               int dst_net = bpf_htonl(dst_host);
               int next_net = bpf_htonl(next);
+              bpf_printk("new_src: %d next: %d", dst_host, next);
               __builtin_memcpy(src_payload, &dst_net, sizeof(int));
               __builtin_memcpy(dst_payload, &next_net, sizeof(int));
 
@@ -284,6 +299,8 @@ int kfunc(struct xdp_md *ctx) {
               iph->saddr = info_forwad_next->src_ip;
               iph->daddr = info_forwad_next->dst_ip;
               iph->check = ip_checksum_xdp(iph);
+              // bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
+              // bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
               return XDP_TX;
             }
           }
@@ -476,7 +493,7 @@ int kfunc(struct xdp_md *ctx) {
     return XDP_PASS;
   }
   if (iph->saddr == bpf_htonl(3232261378)) { // src ip 192.168.101.1
-                                             //     bpf_printk("Grecale say i");
+    bpf_printk("Grecale say i");
     void *payload = (void *)udph + sizeof(*udph);
 
     const int num_char = 4;
@@ -549,13 +566,11 @@ int kfunc(struct xdp_md *ctx) {
     __builtin_memcpy(&seq, seq_payload, sizeof(unsigned long));
     unsigned long seq_host = bpf_ntohl(seq);
 
-    // bpf_printk("root: %d, src: %d, dst: %d, opcode: %d, datatype: %d,
-    //                len : %
-    //                d,
-    //            "
-    //            "tag: %d seq: %lu",
-    //            root_host, src_host, dst_host, opcode_host, datatype_host,
-    //            len_host, tag_host, seq_host);
+    bpf_printk(
+        "CASE 2 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
+        "%d, tag: %d seq: %lu",
+        root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
+        tag_host, seq_host);
 
     switch (opcode_host) {
     case MPI_SEND:
@@ -569,36 +584,46 @@ int kfunc(struct xdp_md *ctx) {
         if (ctx->data_meta + sizeof(__u32) <= ctx->data) {
           int iter_copy = 0;
           __builtin_memcpy(&iter_copy, data_meta, sizeof(iter_copy));
-          // bpf_printk("num_copy: %d", num_copy);
+          bpf_printk("CASE 2 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
+                     "datatype: %d, len : "
+                     "%d, tag: %d seq: %lu",
+                     iter_copy, root_host, src_host, dst_host, opcode_host,
+                     datatype_host, len_host, tag_host, seq_host);
+          // bpf_printk("old_src_ip %lu", bpf_ntohl(iph->saddr));
           int key_num_process = 0;
-          int *size = bpf_map_lookup_elem(&num_process, &key_num_process);
-          if (size) {
+          int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
+          if (size_ptr) {
+            int size = *size_ptr;
             if (iter_copy == 0) {
               return XDP_CLONE_PASS(2);
             }
             // bpf_printk("size: %d", *size);
             // int next = (int)(((unsigned)(dst_host + 1)) %
             // ((unsigned)(*size)));
+            // if (src_host > (int)((unsigned int)size / 2)) {
+            //   return XDP_DROP;
+            // }
             int next =
-                (int)(((unsigned)((2 * __src) + 2)) % ((unsigned)(*size)));
-            if (root_host == next) {
+                (int)(((unsigned)((2 * src_host) + 2)) % ((unsigned)(size)));
+            if (next == (size - 1)) {
               return XDP_DROP;
             }
             tuple_process inter_dest = {0};
-            inter_dest.src_procc = __src;
+            inter_dest.src_procc = src_host;
             inter_dest.dst_procc = next;
             socket_id *info_forwad_next =
                 bpf_map_lookup_elem(&proc_to_address, &inter_dest);
             if (info_forwad_next) {
-              __u8 src_mac[ETH_ALEN];
-              __u8 dst_mac[ETH_ALEN];
-              __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
-              __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
-              __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
-              __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
+              // __u8 src_mac[ETH_ALEN];
+              // __u8 dst_mac[ETH_ALEN];
+              // __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
+              // __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
+              // __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
+              // __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
 
-              int dst_net = bpf_htonl(dst_host);
+              int dst_net = bpf_htonl(src_host);
               int next_net = bpf_htonl(next);
+              bpf_printk("new_src: %d next: %d", src_host, next);
               __builtin_memcpy(src_payload, &dst_net, sizeof(int));
               __builtin_memcpy(dst_payload, &next_net, sizeof(int));
 
@@ -609,6 +634,9 @@ int kfunc(struct xdp_md *ctx) {
               iph->saddr = info_forwad_next->src_ip;
               iph->daddr = info_forwad_next->dst_ip;
               iph->check = ip_checksum_xdp(iph);
+              // bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
+              // bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
+              // __src = 0;
               return XDP_TX;
             }
           }
