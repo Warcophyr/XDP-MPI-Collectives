@@ -156,7 +156,8 @@ int kfunc(struct xdp_md *ctx) {
     const int num_char = 4;
     const int needed = (sizeof(char) * 4) + (sizeof(int) * 3) +
                        sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                       (sizeof(int) * 2) + sizeof(unsigned long);
+                       (sizeof(int) * 2) + sizeof(unsigned long) +
+                       sizeof(unsigned long);
     if (payload + needed > data_end)
       return XDP_PASS; /* not enough payload */
 
@@ -224,11 +225,19 @@ int kfunc(struct xdp_md *ctx) {
     __builtin_memcpy(&seq, seq_payload, sizeof(unsigned long));
     unsigned long seq_host = bpf_ntohl(seq);
 
-    // bpf_printk(
-    //     "CASE 1 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
-    //     "%d, tag: %d seq: %lu",
-    //     root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
-    //     tag_host, seq_host);
+    unsigned long clock;
+    void *clock_payload = (char *)payload + (sizeof(char) * 4) +
+                          (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                          sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                          sizeof(unsigned long);
+    __builtin_memcpy(&clock, clock_payload, sizeof(unsigned long));
+    unsigned long clock_host = bpf_ntohl(clock);
+
+    bpf_printk(
+        "CASE 1 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
+        "%d, tag: %d seq: %lu clock: %lu",
+        root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
+        tag_host, seq_host, clock_host);
 
     switch (opcode_host) {
     case MPI_SEND:
@@ -251,17 +260,17 @@ int kfunc(struct xdp_md *ctx) {
               bpf_printk(
                   "CASE 0 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
                   "datatype: %d, len : "
-                  "%d, tag: %d seq: %lu",
+                  "%d, tag: %d seq: %lu clock: %lu",
                   iter_copy, root_host, src_host, dst_host, opcode_host,
-                  datatype_host, len_host, tag_host, seq_host);
+                  datatype_host, len_host, tag_host, seq_host, clock_host);
               return XDP_CLONE_PASS(2);
             }
             bpf_printk(
                 "CASE 1 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
                 "datatype: %d, len : "
-                "%d, tag: %d seq: %lu",
+                "%d, tag: %d seq: %lu clock: %lu",
                 iter_copy, root_host, src_host, dst_host, opcode_host,
-                datatype_host, len_host, tag_host, seq_host);
+                datatype_host, len_host, tag_host, seq_host, clock_host);
             // bpf_printk("size: %d", *size);
             // int next = (int)(((unsigned)(dst_host + 1)) %
             // ((unsigned)(*size)));
@@ -499,7 +508,8 @@ int kfunc(struct xdp_md *ctx) {
     const int num_char = 4;
     const int needed = (sizeof(char) * 4) + (sizeof(int) * 3) +
                        sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                       (sizeof(int) * 2) + sizeof(unsigned long);
+                       (sizeof(int) * 2) + sizeof(unsigned long) +
+                       sizeof(unsigned long);
     if (payload + needed > data_end)
       return XDP_PASS; /* not enough payload */
 
@@ -566,11 +576,19 @@ int kfunc(struct xdp_md *ctx) {
     __builtin_memcpy(&seq, seq_payload, sizeof(unsigned long));
     unsigned long seq_host = bpf_ntohl(seq);
 
+    unsigned long clock;
+    void *clock_payload = (char *)payload + (sizeof(char) * 4) +
+                          (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                          sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                          sizeof(unsigned long);
+    __builtin_memcpy(&clock, clock_payload, sizeof(unsigned long));
+    unsigned long clock_host = bpf_ntohl(clock);
+
     bpf_printk(
         "CASE 2 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
-        "%d, tag: %d seq: %lu",
+        "%d, tag: %d seq: %lu clock: %lu",
         root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
-        tag_host, seq_host);
+        tag_host, seq_host, clock_host);
 
     switch (opcode_host) {
     case MPI_SEND:
@@ -586,9 +604,9 @@ int kfunc(struct xdp_md *ctx) {
           __builtin_memcpy(&iter_copy, data_meta, sizeof(iter_copy));
           bpf_printk("CASE 2 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
                      "datatype: %d, len : "
-                     "%d, tag: %d seq: %lu",
+                     "%d, tag: %d seq: %lu clock: %lu",
                      iter_copy, root_host, src_host, dst_host, opcode_host,
-                     datatype_host, len_host, tag_host, seq_host);
+                     datatype_host, len_host, tag_host, seq_host, clock_host);
           // bpf_printk("old_src_ip %lu", bpf_ntohl(iph->saddr));
           int key_num_process = 0;
           int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);

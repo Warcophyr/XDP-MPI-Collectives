@@ -72,6 +72,12 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
     exit(EXIT_FAILURE);
   }
   mpi_process_info->rank = rank;
+  mpi_process_info->clocks =
+      (unsigned long **)malloc(sizeof(unsigned long *) * WORD_SIZE);
+  if (mpi_process_info->clocks == NULL) {
+    perror("malloc fail creating vector clock");
+    exit(EXIT_FAILURE);
+  }
 
   // Create UDP socket for this process
   udp_socket_fd = create_udp_socket(BASE_PORT + rank);
@@ -100,6 +106,12 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
       (struct sockaddr_in *)malloc(WORD_SIZE * sizeof(struct sockaddr_in));
 
   for (int i = 0; i < WORD_SIZE; i++) {
+    mpi_process_info->clocks[i] =
+        (unsigned long *)calloc((WORD_SIZE - 1), sizeof(unsigned long));
+    if (mpi_process_info->clocks[i] == NULL) {
+      perror("malloc fail creating vector clock");
+      exit(EXIT_FAILURE);
+    }
     if (i == rank) {
       memset(&peer_addrs[i], 0, sizeof(struct sockaddr_in));
       continue;
@@ -328,7 +340,8 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
   // Create message with tag header
   int total_size = (sizeof(char) * 4) + (sizeof(int) * 3) +
                    sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                   (sizeof(int) * 2) + sizeof(unsigned long) + size;
+                   (sizeof(int) * 2) + sizeof(unsigned long) +
+                   sizeof(unsigned long) + size;
   // printf("send total size %d\n", total_size);
 
   unsigned long seq = 0;
@@ -388,11 +401,18 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
                        sizeof(MPI_Datatype) + (sizeof(int) * 2);
       generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
 
+      void *clock_send = (char *)message + (sizeof(char) * 4) +
+                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                         sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                         sizeof(unsigned long);
+      generic_hton(clock_send, &MPI_PROCESS->clocks[root][dest],
+                   sizeof(unsigned long), 1);
+
       // Add data payload
       void *buf_send = (char *)message + (sizeof(char) * 4) +
                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
                        sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                       sizeof(unsigned long);
+                       sizeof(unsigned long) + sizeof(unsigned long);
 
       void *bufptr = NULL;
       switch (datatype) {
@@ -525,11 +545,18 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
                        sizeof(MPI_Datatype) + (sizeof(int) * 2);
       generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
 
+      void *clock_send = (char *)message + (sizeof(char) * 4) +
+                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                         sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                         sizeof(unsigned long);
+      generic_hton(clock_send, &MPI_PROCESS->clocks[root][dest],
+                   sizeof(unsigned long), 1);
+
       // Add data payload
       void *buf_send = (char *)message + (sizeof(char) * 4) +
                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
                        sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                       sizeof(unsigned long);
+                       sizeof(unsigned long) + sizeof(unsigned long);
 
       void *bufptr = NULL;
       switch (datatype) {
@@ -618,6 +645,7 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       seq += 1;
       offset += chunk;
     }
+    MPI_PROCESS->clocks[root][dest] += 1;
   } else {
     void *message = malloc(total_size);
     if (!message) {
@@ -662,10 +690,18 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
                      (sizeof(int) * 2);
     generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
 
+    void *clock_send = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                       sizeof(unsigned long);
+    generic_hton(clock_send, &MPI_PROCESS->clocks[root][dest],
+                 sizeof(unsigned long), 1);
+
     // Add data payload
     void *buf_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
                      sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                     (sizeof(int) * 2) + sizeof(unsigned long);
+                     (sizeof(int) * 2) + sizeof(unsigned long) +
+                     sizeof(unsigned long);
     switch (datatype) {
     case MPI_CHAR:
       generic_hton(buf_send, buf, sizeof(char), count);
@@ -731,6 +767,7 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       perror("sendto failed");
       return -1;
     }
+    MPI_PROCESS->clocks[root][dest] += 1;
   }
 
   return count;
@@ -871,7 +908,8 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
 
   int total_size = (sizeof(char) * 4) + (sizeof(int) * 3) +
                    sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                   (sizeof(int) * 2) + sizeof(unsigned long) + size;
+                   (sizeof(int) * 2) + sizeof(unsigned long) +
+                   sizeof(unsigned long) + size;
 
   // printf("recv total size %d\n", total_size);
   if (total_size > 1472) {
@@ -959,15 +997,23 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
                        sizeof(MPI_Datatype) + (sizeof(int) * 2);
       generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
 
+      unsigned long clock;
+      void *clock_recv = (char *)message + (sizeof(char) * 4) +
+                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                         sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                         sizeof(unsigned long);
+      generic_ntoh(&clock, clock_recv, sizeof(unsigned long), 1);
+
       // Extract data payload
       void *buf_recv = (char *)message + (sizeof(char) * 4) +
                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
                        sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                       sizeof(unsigned long);
+                       sizeof(unsigned long) + sizeof(unsigned long);
       int data_size =
           received -
           ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long));
+           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long) +
+           sizeof(unsigned long));
 
       // printf("rank: %d datasize: %d, received: %d\n", MPI_PROCESS->rank,
       //        data_size, received);
@@ -1235,15 +1281,24 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
     void *seq_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
                      sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
                      (sizeof(int) * 2);
-    generic_ntoh(&seq, &seq_recv, sizeof(unsigned long), 1);
+    generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
+
+    unsigned long clock;
+    void *clock_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2) +
+                       sizeof(unsigned long);
+    generic_ntoh(&clock, clock_recv, sizeof(unsigned long), 1);
 
     // Extract data payload
     void *buf_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
                      sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                     (sizeof(int) * 2) + sizeof(unsigned long);
+                     (sizeof(int) * 2) + sizeof(unsigned long) +
+                     sizeof(unsigned long);
     int data_size = received - ((sizeof(char) * 4) + (sizeof(int) * 3) +
                                 sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                                (sizeof(int) * 2) + sizeof(unsigned long));
+                                (sizeof(int) * 2) + sizeof(unsigned long) +
+                                sizeof(unsigned long));
 
     if (data_size != size) {
       free(message);
@@ -1316,6 +1371,7 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
 
     free(message);
   }
+  MPI_PROCESS->clocks[source][MPI_PROCESS->rank] += 1;
   return count;
 }
 

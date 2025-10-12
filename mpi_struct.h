@@ -57,10 +57,21 @@ typedef enum MPI_Opcode {
   MPI_REPLACE
 } MPI_Opcode;
 
+typedef struct tuple_process {
+  __u32 src_procc;
+  __u32 dst_procc;
+} tuple_process;
+
+typedef struct vector_clock {
+  tuple_process tupla;
+  unsigned long clock;
+} vector_clock;
+
 typedef struct MPI_process_info {
   int rank;
   int *socket_fd;
   int *socket_barrier_fd;
+  unsigned long **clocks;
 } MPI_process_info;
 
 typedef struct socket_id {
@@ -70,11 +81,6 @@ typedef struct socket_id {
   uint16_t dst_port;
   uint8_t protocol; // IPPROTO_TCP = 6
 } socket_id;
-
-typedef struct tuple_process {
-  __u32 src_procc;
-  __u32 dst_procc;
-} tuple_process;
 
 typedef struct ebpf_loader {
   struct bpf_object *obj;

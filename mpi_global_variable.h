@@ -18,7 +18,8 @@
 #define MAX_MESSAGE_SIZE 1024
 #define MPI_HEADER                                                             \
   (sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +            \
-      sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long)
+      sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long) +       \
+      sizeof(unsigned long)
 
 EBPF_info EBPF_INFO = {0};
 struct ebpf_loader loader = {0};
