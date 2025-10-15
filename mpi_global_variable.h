@@ -15,11 +15,12 @@
 #define MPI_GLOVAL_VAR
 #define BASE_PORT 5000
 #define BARRIER_PORT 10000
-#define MAX_MESSAGE_SIZE 1024
+#define MAX_PAYLOAD 1472
 #define MPI_HEADER                                                             \
-  (sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +            \
-      sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long) +       \
-      sizeof(unsigned long)
+  ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +           \
+   sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long) +          \
+   sizeof(unsigned long))
+#define PAYLOAD_SIZE (MAX_PAYLOAD - MPI_HEADER)
 
 EBPF_info EBPF_INFO = {0};
 struct ebpf_loader loader = {0};

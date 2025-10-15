@@ -9,7 +9,7 @@
 // #define SERVER_IP "100.82.216.62" // funziona ip preso tramite tailscale
 // status intefacia enp52s0f1np1
 #define SERVER_IP                                                              \
-  "192.168.101.2" // non funziona ip preso tramite ip a intefacia enp52s0f1np1
+  "192.168.101.1" // non funziona ip preso tramite ip a intefacia enp52s0f1np1
 // #define SERVER_IP "192.168.137.5" // funziona ip preso tramite ip a
 // interfaccia eno1 di maestrale
 

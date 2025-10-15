@@ -10,8 +10,8 @@
 #include <linux/in.h>
 #include <linux/if_xdp.h>
 
-#define __XDP_CLONE_PASS 6
-#define __XDP_CLONE_TX 7
+#define __XDP_CLONE_PASS 5
+#define __XDP_CLONE_TX 6
 #define XDP_CLONE_PASS(num_copy)                                               \
   (((int)(num_copy) << 5) | (int)__XDP_CLONE_PASS)
 #define XDP_CLONE_TX(num_copy) (((int)(num_copy) << 5) | (int)__XDP_CLONE_TX)

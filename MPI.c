@@ -172,7 +172,7 @@ int main(int argc, char *argv[]) {
   //     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
   //     1};
 
-  const size_t N = 1451;
+  const size_t N = 500000;
   char y[N];
   for (int i = 0; i < N; i++) {
     y[i] = 'a'; // set each element to 'a'
@@ -191,7 +191,7 @@ int main(int argc, char *argv[]) {
       // if (MPI_PROCESS->rank == 0) {
       //   printf("start: %lf\n", ttotal);
       // }
-      if (MPI_PROCESS->rank == 7) {
+      if (MPI_PROCESS->rank == 0) {
 
         x[0] = 2;
         x[1] = 3;
@@ -239,10 +239,10 @@ int main(int argc, char *argv[]) {
       // }
       fflush(stdout);
       // mpi_bcast_ring(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
-      // mpi_bcast_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 6);
+      // mpi_bcast_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 0);
       // mpi_bcast_ring_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
       // // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
-      mpi_bcast_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 7);
+      mpi_bcast_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
       // mpi_bcast(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
       // mpi_reduce_ring(&x, sizeof(x) / sizeof(int), MPI_INT, MPI_SUM, 1);
       // mpi_bcast_ring_raw(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
@@ -250,6 +250,9 @@ int main(int argc, char *argv[]) {
       // mpi_bcast_ring_raw(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
       // mpi_barrier();
       ttotal = cp_Wtime() - ttotal;
+
+      mpi_reduce_ring(&ttotal, sizeof(ttotal) / sizeof(double), MPI_DOUBLE,
+                      MPI_MAX, 0);
       // if (MPI_PROCESS->rank == 0) {
       //   printf("end: %lf\n", ttotalend);
       // }
@@ -269,15 +272,15 @@ int main(int argc, char *argv[]) {
       //   // mpi_barrier_ring();
       // }
       // mpi_barrier_ring();
-      for (size_t r = 0; r < WORD_SIZE; r++) {
-        // mpi_barrier_ring();
-        if (MPI_PROCESS->rank == r) {
-          printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
-          printf("\n");
-          fflush(stdout);
-        }
-        // mpi_barrier_ring();
-      }
+      // for (size_t r = 0; r < WORD_SIZE; r++) {
+      //   // mpi_barrier_ring();
+      //   if (MPI_PROCESS->rank == r) {
+      //     printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
+      //     printf("\n");
+      //     fflush(stdout);
+      //   }
+      //   // mpi_barrier_ring();
+      // }
       // if (MPI_PROCESS->rank == 0) {
       //   printf("Rank: %d: len: %d \n%s\n", MPI_PROCESS->rank, strlen(y), y);
       //   printf("\n");

@@ -2,7 +2,7 @@ CLANG        := clang
 GCC          := gcc
 # KFLAGS       := -O2 -g -target bpf
 UFLAGS       := -O3 -Wall 
-GDB          := -g -O1 -fsanitize=address -fno-omit-frame-pointer
+GDB          := -g -fsanitize=address -fno-omit-frame-pointer
 LIBS         := -lbpf -lelf -lz -lxdp -lm
 
 # KOBJ         := xdp_prog_kern.o
@@ -39,7 +39,7 @@ kfunc: $(TARGETS)
 	gcc -g -O2 -o $@ $@.c -lbpf
 
 run:
-	sudo ./MPI -n 9 -i enp52s0f1np1
+	sudo ./MPI -n 4 -i enp52s0f1np1
 
 clean:
 	rm -f MPI
