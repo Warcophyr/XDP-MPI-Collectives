@@ -38,6 +38,7 @@ typedef enum MPI_Datatype {
 typedef enum MPI_Collective {
   MPI_SEND,
   MPI_BCAST,
+  MPI_BCAST_RING,
   MPI_REDUCE,
   MPI_SHATTER,
   MPI_GATHER,
@@ -168,8 +169,8 @@ int kfunc(struct xdp_md *ctx) {
                        sizeof(char));
     }
 
-    bpf_printk("udp first4: %c %c %c %c\n", mpi_header[0], mpi_header[1],
-               mpi_header[2], mpi_header[3]);
+    // bpf_printk("udp first4: %c %c %c %c\n", mpi_header[0], mpi_header[1],
+    //            mpi_header[2], mpi_header[3]);
     if (mpi_header[0] != 'M' && mpi_header[1] != 'P' && mpi_header[2] != 'I' &&
         mpi_header[3] != '\0') {
       return XDP_PASS;
@@ -233,11 +234,11 @@ int kfunc(struct xdp_md *ctx) {
     __builtin_memcpy(&clock, clock_payload, sizeof(unsigned long));
     unsigned long clock_host = bpf_ntohl(clock);
 
-    bpf_printk(
-        "CASE 1 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
-        "%d, tag: %d seq: %lu clock: %lu",
-        root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
-        tag_host, seq_host, clock_host);
+    // bpf_printk(
+    //     "CASE 1 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
+    //     "%d, tag: %d seq: %lu clock: %lu",
+    //     root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
+    //     tag_host, seq_host, clock_host);
 
     switch (opcode_host) {
     case MPI_SEND:
@@ -257,20 +258,20 @@ int kfunc(struct xdp_md *ctx) {
           if (size_ptr) {
             int size = *size_ptr;
             if (iter_copy == 0) {
-              bpf_printk(
-                  "CASE 0 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
-                  "datatype: %d, len : "
-                  "%d, tag: %d seq: %lu clock: %lu",
-                  iter_copy, root_host, src_host, dst_host, opcode_host,
-                  datatype_host, len_host, tag_host, seq_host, clock_host);
+              // bpf_printk(
+              //     "CASE 0 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
+              //     "datatype: %d, len : "
+              //     "%d, tag: %d seq: %lu clock: %lu",
+              //     iter_copy, root_host, src_host, dst_host, opcode_host,
+              //     datatype_host, len_host, tag_host, seq_host, clock_host);
               return XDP_CLONE_PASS(2);
             }
-            bpf_printk(
-                "CASE 1 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
-                "datatype: %d, len : "
-                "%d, tag: %d seq: %lu clock: %lu",
-                iter_copy, root_host, src_host, dst_host, opcode_host,
-                datatype_host, len_host, tag_host, seq_host, clock_host);
+            // bpf_printk(
+            //     "CASE 1 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
+            //     "datatype: %d, len : "
+            //     "%d, tag: %d seq: %lu clock: %lu",
+            //     iter_copy, root_host, src_host, dst_host, opcode_host,
+            //     datatype_host, len_host, tag_host, seq_host, clock_host);
             // bpf_printk("size: %d", *size);
             // int next = (int)(((unsigned)(dst_host + 1)) %
             // ((unsigned)(*size)));
@@ -280,8 +281,62 @@ int kfunc(struct xdp_md *ctx) {
             int next =
                 (int)(((unsigned)((2 * dst_host) + 1)) % ((unsigned)(size)));
             if (next == (size - 1)) {
+              // bpf_printk("hi 1");
               return XDP_DROP;
             }
+            tuple_process inter_dest = {0};
+            inter_dest.src_procc = dst_host;
+            inter_dest.dst_procc = next;
+            socket_id *info_forwad_next =
+                bpf_map_lookup_elem(&proc_to_address, &inter_dest);
+            if (info_forwad_next) {
+              __u8 src_mac[ETH_ALEN];
+              __u8 dst_mac[ETH_ALEN];
+              __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
+              __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
+              __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
+              __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
+
+              int dst_net = bpf_htonl(dst_host);
+              int next_net = bpf_htonl(next);
+              bpf_printk("new_src: %d next: %d", dst_host, next);
+              __builtin_memcpy(src_payload, &dst_net, sizeof(int));
+              __builtin_memcpy(dst_payload, &next_net, sizeof(int));
+
+              udph->source = bpf_htons(info_forwad_next->src_port);
+              udph->dest = bpf_htons(info_forwad_next->dst_port);
+              udph->check = 0;
+
+              iph->saddr = info_forwad_next->src_ip;
+              iph->daddr = info_forwad_next->dst_ip;
+              iph->check = ip_checksum_xdp(iph);
+              // bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
+              // bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
+              return XDP_TX;
+            }
+          }
+        } else {
+          return XDP_PASS;
+        }
+      }
+    } break;
+    case MPI_BCAST_RING: {
+      if (root_host == dst_host) {
+        return XDP_DROP;
+      }
+      if (ctx->data + sizeof(__u32) <= ctx->data_end) {
+        if (ctx->data_meta + sizeof(__u32) <= ctx->data) {
+          int iter_copy = 0;
+          __builtin_memcpy(&iter_copy, data_meta, sizeof(iter_copy));
+          // bpf_printk("num_copy: %d", num_copy);
+          int key_num_process = 0;
+          int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
+          if (size_ptr) {
+            int size = *size_ptr;
+            if (iter_copy == 0) {
+              return XDP_CLONE_PASS(1);
+            }
+            int next = (int)(((unsigned)((dst_host) + 1)) % ((unsigned)(size)));
             tuple_process inter_dest = {0};
             inter_dest.src_procc = dst_host;
             inter_dest.dst_procc = next;
@@ -520,8 +575,8 @@ int kfunc(struct xdp_md *ctx) {
                        sizeof(char));
     }
 
-    bpf_printk("udp first4: %c %c %c %c\n", mpi_header[0], mpi_header[1],
-               mpi_header[2], mpi_header[3]);
+    // bpf_printk("udp first4: %c %c %c %c\n", mpi_header[0], mpi_header[1],
+    //            mpi_header[2], mpi_header[3]);
     if (mpi_header[0] != 'M' && mpi_header[1] != 'P' && mpi_header[2] != 'I' &&
         mpi_header[3] != '\0') {
       return XDP_PASS;
@@ -584,11 +639,11 @@ int kfunc(struct xdp_md *ctx) {
     __builtin_memcpy(&clock, clock_payload, sizeof(unsigned long));
     unsigned long clock_host = bpf_ntohl(clock);
 
-    bpf_printk(
-        "CASE 2 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
-        "%d, tag: %d seq: %lu clock: %lu",
-        root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
-        tag_host, seq_host, clock_host);
+    // bpf_printk(
+    //     "CASE 2 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
+    //     "%d, tag: %d seq: %lu clock: %lu",
+    //     root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
+    //     tag_host, seq_host, clock_host);
 
     switch (opcode_host) {
     case MPI_SEND:
@@ -602,11 +657,13 @@ int kfunc(struct xdp_md *ctx) {
         if (ctx->data_meta + sizeof(__u32) <= ctx->data) {
           int iter_copy = 0;
           __builtin_memcpy(&iter_copy, data_meta, sizeof(iter_copy));
-          bpf_printk("CASE 2 iter: %d root: %d, src: %d, dst: %d, opcode: %d, "
-                     "datatype: %d, len : "
-                     "%d, tag: %d seq: %lu clock: %lu",
-                     iter_copy, root_host, src_host, dst_host, opcode_host,
-                     datatype_host, len_host, tag_host, seq_host, clock_host);
+          // bpf_printk("CASE 2 iter: %d root: %d, src: %d, dst: %d, opcode: %d,
+          // "
+          //            "datatype: %d, len : "
+          //            "%d, tag: %d seq: %lu clock: %lu",
+          //            iter_copy, root_host, src_host, dst_host, opcode_host,
+          //            datatype_host, len_host, tag_host, seq_host,
+          //            clock_host);
           // bpf_printk("old_src_ip %lu", bpf_ntohl(iph->saddr));
           int key_num_process = 0;
           int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
@@ -624,6 +681,7 @@ int kfunc(struct xdp_md *ctx) {
             int next =
                 (int)(((unsigned)((2 * src_host) + 2)) % ((unsigned)(size)));
             if (next == (size - 1)) {
+              // bpf_printk("hi 2");
               return XDP_DROP;
             }
             tuple_process inter_dest = {0};

@@ -31,7 +31,8 @@ all: $(TARGETS)
 # 	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
 
 MPI: ./MPI.c
-	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
+# 	$(GCC) $(UFLAGS) $(GDB) $< -o $@ $(LIBS)
+	$(GCC) $(UFLAGS)  $< -o $@ $(LIBS)
 
 kfunc: $(TARGETS)
 	clang -g -O2 --target=bpf -c $@.bpf.c -o $@.bpf.o -I ./kernel_module
@@ -39,7 +40,7 @@ kfunc: $(TARGETS)
 	gcc -g -O2 -o $@ $@.c -lbpf
 
 run:
-	sudo ./MPI -n 4 -i enp52s0f1np1
+	sudo ./MPI -n 32 -i enp52s0f1np1
 
 clean:
 	rm -f MPI

@@ -34,6 +34,7 @@ typedef enum MPI_Datatype {
 typedef enum MPI_Collective {
   MPI_SEND,
   MPI_BCAST,
+  MPI_BCAST_RING,
   MPI_REDUCE,
   MPI_SHATTER,
   MPI_GATHER,

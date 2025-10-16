@@ -31,7 +31,8 @@ int extract_5tuple(int sockfd, struct socket_id *id) {
 int create_udp_socket(int port) {
   int socket_fd;
   struct sockaddr_in addr;
-
+  const int SIZE = 1024 * 1024 * 1024;
+  ssize_t size = 0;
   socket_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (socket_fd < 0) {
     perror("socket failed\n");
@@ -49,6 +50,14 @@ int create_udp_socket(int port) {
       0) {
     perror("setsocketopt SO_RCVTIMEO\n");
   }
+  if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVBUF, &SIZE, sizeof(SIZE)) < 0) {
+    perror("setsocketopt SO_RCVBUF\n");
+  }
+  if (setsockopt(socket_fd, SOL_SOCKET, SO_SNDBUF, &SIZE, sizeof(SIZE)) < 0) {
+    perror("setsocketopt SO_RCVBUF\n");
+  }
+  // getsockopt(socket_fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+  // printf("size buffe: %llu\n", size);
 
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
@@ -650,6 +659,10 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       }
       seq += 1;
       offset += PAYLOAD_SIZE;
+      // if (i % 8 == 0) {
+      usleep(1000);
+      // sleep(10);
+      // }
     }
 
     const size_t FINAL_SEND =
@@ -796,6 +809,10 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
     }
     seq += 1;
     offset += FINAL_SEND;
+
+    usleep(1000);
+    // sleep(1);
+    // sleep(10);
 
     MPI_PROCESS->clocks[root][dest] += 1;
   } else {
@@ -1227,7 +1244,6 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
   if (total_size > 1472) {
     size_t offset = 0;
     const size_t N = ceil((double)size / (double)(PAYLOAD_SIZE));
-    // printf("rank: %d fragment: %d\n", MPI_PROCESS->rank, N);
     size_t rem = size % N;
     const size_t FINAL_SEND =
         rem != 0 ? size - ((N - 1) * PAYLOAD_SIZE) : PAYLOAD_SIZE;
@@ -1241,6 +1257,7 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
     // printf("recv base: %lu chunk:%d chunk+:%d rem:%lu\n", base, chunk,
     //        chunk_rem, rem);
     for (size_t i = 0; i < N; i++) {
+      // printf("rank: %d iter: %d\n", MPI_PROCESS->rank, i);
 
       void *message = malloc(MAX_PAYLOAD);
       if (!message) {
@@ -1347,9 +1364,10 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
       // printf("size: %d\n", __size);
       fragment[seq].arr = malloc(__size + 1);
       if (fragment[seq].arr == NULL) {
-        perror("malloca fragment fail1n");
+        perror("malloca fragment fail\n");
         exit(EXIT_FAILURE);
       }
+      memset(fragment[seq].arr, 0, __size + 1);
       switch (datatype) {
       case MPI_CHAR: {
         generic_ntoh(fragment[seq].arr, buf_recv, sizeof(char),
@@ -1432,6 +1450,10 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
       free(message);
     }
     for (size_t i = 0; i < N; i++) {
+      if (fragment[i].arr == NULL) {
+        printf("rank: %d lost_seq: %d\n", MPI_PROCESS->rank, i);
+        continue;
+      }
 
       void *bufptr = NULL;
       switch (datatype) {
@@ -1829,10 +1851,10 @@ int mpi_bcast_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
   if (rank == root) {
     // printf("Process %d (root) sending to %d\n", rank, next);
     // if (root <= (size / 2)) {
+    __mpi_send(buf, count, datatype, root, size - 1, tag, MPI_SEND);
     __mpi_send(buf, count, datatype, root, dst_one, tag, MPI_BCAST);
     // __mpi_send(buf, count, datatype, root, dst_one, tag, MPI_SEND);
     __mpi_send(buf, count, datatype, root, dst_two, tag, MPI_BCAST);
-    __mpi_send(buf, count, datatype, root, size - 1, tag, MPI_SEND);
     // __mpi_send(buf, count, datatype, root, dst_two, tag, MPI_SEND);
     // } else {
     //   __mpi_send(buf, count, datatype, root, 0, tag, MPI_BCAST);
@@ -1901,7 +1923,7 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
   // 1) Root kicks off by sending to (root+1)%size
   if (rank == root) {
     // printf("Process %d (root) sending to %d\n", rank, next);
-    __mpi_send(buf, count, datatype, root, next, tag, MPI_BCAST);
+    __mpi_send(buf, count, datatype, root, next, tag, MPI_BCAST_RING);
   }
 
   // 2) Everyone except root must receive from their predecessor
