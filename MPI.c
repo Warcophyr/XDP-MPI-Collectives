@@ -296,7 +296,11 @@ int main(int argc, char *argv[]) {
   //     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
   // const size_t N = 8241000;
-  const size_t N = 50000;
+  // const size_t N = 5000000;
+  const size_t N = 2000000;
+  // const size_t N = 1000000;
+  // const size_t N = 50000;
+  // const size_t N = 5000;
   char y[N];
   for (int i = 0; i < N; i++) {
     y[i] = 'a'; // set each element to 'a'
@@ -377,8 +381,8 @@ int main(int argc, char *argv[]) {
       // mpi_barrier();
       ttotal = cp_Wtime() - ttotal;
 
-      // mpi_reduce_ring(&ttotal, sizeof(ttotal) / sizeof(double), MPI_DOUBLE,
-      //                 MPI_MAX, 0);
+      mpi_reduce_ring(&ttotal, sizeof(ttotal) / sizeof(double), MPI_DOUBLE,
+                      MPI_MAX, 0);
       // if (MPI_PROCESS->rank == 0) {
       //   printf("end: %lf\n", ttotalend);
       // }
@@ -407,11 +411,11 @@ int main(int argc, char *argv[]) {
       //   }
       //   // mpi_barrier_ring();
       // }
-      if (MPI_PROCESS->rank == 1) {
-        printf("Rank: %d: len: %d \n%s\n", MPI_PROCESS->rank, strlen(y), y);
-        printf("\n");
-        fflush(stdout);
-      }
+      // if (MPI_PROCESS->rank == 1) {
+      //   printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y), y);
+      //   printf("\n");
+      //   fflush(stdout);
+      // }
       // for (int i = 0; i < WORD_SIZE; i++) {
       //   wait(NULL); // wait for each child to finish
       // }

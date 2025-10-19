@@ -18,6 +18,8 @@
 #include <locale.h>
 #include <sys/resource.h>
 #include <net/if.h>
+#include <poll.h>
+#include <fcntl.h>
 
 // Raw socket includes - add these before other networking includes
 // #include <linux/if_packet.h>  // For AF_PACKET
