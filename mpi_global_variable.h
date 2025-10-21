@@ -14,7 +14,6 @@
 
 #define MPI_GLOVAL_VAR
 #define BASE_PORT 5000
-#define BARRIER_PORT 10000
 #define MAX_PAYLOAD 1472
 #define MPI_HEADER                                                             \
   ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +           \

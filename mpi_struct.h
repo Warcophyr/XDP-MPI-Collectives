@@ -13,6 +13,8 @@ typedef struct Array {
 } Array;
 
 typedef enum MPI_Datatype {
+  MPI_ACK,
+  MPI_NACK,
   MPI_CHAR,
   MPI_SIGNED_CHAR,
   MPI_UNSIGNED_CHAR,
@@ -42,6 +44,25 @@ typedef enum MPI_Collective {
   MPI_GATHERV
 } MPI_Collective;
 
+typedef struct mpihdr {
+  char *text;
+  int root;
+  int src;
+  int dst;
+  MPI_Collective collective;
+  MPI_Datatype datatype;
+  int len;
+  int tag;
+  unsigned long seq;
+  unsigned long id;
+  void *data;
+} mpihdr;
+
+typedef struct list_of_mpihdr {
+  mpihdr *packet;
+  mpihdr *next;
+} list_of_mpihdr;
+
 typedef enum MPI_Opcode {
   MPI_SUM,
   MPI_PROD,
@@ -63,16 +84,12 @@ typedef struct tuple_process {
   __u32 dst_procc;
 } tuple_process;
 
-typedef struct vector_clock {
-  tuple_process tupla;
-  unsigned long clock;
-} vector_clock;
-
 typedef struct MPI_process_info {
   int rank;
   int *socket_fd;
-  int *socket_barrier_fd;
-  unsigned long **clocks;
+  unsigned long **ids;
+  list_of_mpihdr *packet_queqe;
+  list_of_mpihdr *ack_queqe;
 } MPI_process_info;
 
 typedef struct socket_id {

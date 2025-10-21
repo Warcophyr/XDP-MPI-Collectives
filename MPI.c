@@ -295,13 +295,21 @@ int main(int argc, char *argv[]) {
   //     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
   //     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
+  // const size_t N = 10000000;
   // const size_t N = 8241000;
   // const size_t N = 5000000;
-  const size_t N = 2000000;
+  // const size_t N = 2000000;
   // const size_t N = 1000000;
-  // const size_t N = 50000;
-  // const size_t N = 5000;
+  const size_t N = 50000;
+  // const size_t N = 2;
+  // const size_t N = 1424;
   char y[N];
+  // char *y = malloc(N + 1);
+  // if (y == NULL) {
+  //   // perror("malloc fail\n");
+  //   printf("malloc fail\n");
+  //   exit(EXIT_FAILURE);
+  // }
   for (int i = 0; i < N; i++) {
     y[i] = 'a'; // set each element to 'a'
   }
@@ -339,32 +347,27 @@ int main(int argc, char *argv[]) {
         }
         y[N - 2] = 'E';
 
-        // mpi_send_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 0, 2, &value);
-        // mpi_send_raw(&x, sizeof(x), MPI_INT, 0, 2, &value);
-        // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
-        // mpi_send_xdp(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
-
-        // mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
-
-        // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 2, 2, &value);
-        // mpi_send_raw_blanch(&x, sizeof(x), MPI_CHAR, 0, 2, &value);
-        // mpi_send(x, sizeof(x) / sizeof(int), MPI_INT, 0, 2);
-        // mpi_send_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 2, 2, &value);
-        // mpi_send_raw_blanch_v2(2, MPI_BCAST, MPI_INT, 9);
-        // mpi_send_raw_blanch_v2(3, MPI_BCAST, MPI_INT, 9);
+        mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
+        // __mpi_send_ack_nack(1, 22, 9, 99, MPI_ACK, MPI_SEND);
       }
-      // if (MPI_PROCESS->rank == 1) {
+      if (MPI_PROCESS->rank == 1) {
 
-      //   // TODO: implement ritrasmission in case of lost packet
-      //   mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
-      // }
-      // if (MPI_PROCESS->rank == 2) {
-      //   mpi_recv(x, sizeof(x) / sizeof(int), MPI_INT, 1, 2);
-      //   // mpi_send_raw_blanch_v2(3, MPI_BCAST, MPI_INT, 9);
-      // }
-      // if (MPI_PROCESS->rank == 3) {
-      //   mpi_recv(x, sizeof(x) / sizeof(int), MPI_INT, 1, 2);
-      // }
+        // TODO: implement ritrasmission in case of lost packet
+        mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
+        // int _src = 0;
+        // int _dst = 0;
+        // int _tag = 0;
+        // unsigned long _seq = 0;
+        // unsigned long _id = 0;
+        // MPI_Datatype _datatype = 0;
+        // MPI_Collective _collective = 0;
+        // __mpi_recv_ack_nack(&_src, &_dst, &_tag, &_seq, &_id, &_datatype,
+        //                     &_datatype);
+        // printf("rank: %d\nsrc: %d\ndst: %d\ntag: %d\nseq: %lu\nid: "
+        //        "%lu\ndatatype: %d\ncolletive: %d\n",
+        //        MPI_PROCESS->rank, _src, _dst, _tag, _seq, _id, _datatype,
+        //        _collective);
+      }
       fflush(stdout);
       // mpi_bcast_ring(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
       // mpi_bcast_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 0);
@@ -372,17 +375,12 @@ int main(int argc, char *argv[]) {
       // // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
       //  TODO: bug in XDP level to fix tree send
       // mpi_bcast_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-      mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+      // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
       // mpi_bcast(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-      // mpi_reduce_ring(&x, sizeof(x) / sizeof(int), MPI_INT, MPI_SUM, 1);
-      // mpi_bcast_ring_raw(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
-      // mpi_barrier();
-      // mpi_bcast_ring_raw(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
-      // mpi_barrier();
       ttotal = cp_Wtime() - ttotal;
 
-      mpi_reduce_ring(&ttotal, sizeof(ttotal) / sizeof(double), MPI_DOUBLE,
-                      MPI_MAX, 0);
+      // mpi_reduce_ring(&ttotal, sizeof(ttotal) / sizeof(double), MPI_DOUBLE,
+      //                 MPI_MAX, 0);
       // if (MPI_PROCESS->rank == 0) {
       //   printf("end: %lf\n", ttotalend);
       // }
@@ -411,11 +409,11 @@ int main(int argc, char *argv[]) {
       //   }
       //   // mpi_barrier_ring();
       // }
-      // if (MPI_PROCESS->rank == 1) {
-      //   printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y), y);
-      //   printf("\n");
-      //   fflush(stdout);
-      // }
+      if (MPI_PROCESS->rank == 1) {
+        printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y), y);
+        printf("\n");
+        fflush(stdout);
+      }
       // for (int i = 0; i < WORD_SIZE; i++) {
       //   wait(NULL); // wait for each child to finish
       // }
