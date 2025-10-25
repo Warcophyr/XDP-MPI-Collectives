@@ -181,6 +181,59 @@ int create_udp_socket(int port) {
   return socket_fd;
 }
 
+int create_tcp_socket(int port) {
+  int socket_fd;
+  struct sockaddr_in addr;
+
+  socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (socket_fd < 0) {
+    perror("socket failed\n");
+    exit(EXIT_FAILURE);
+  }
+
+  int opt = 1;
+  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    perror("bind failed\n");
+    exit(EXIT_FAILURE);
+  }
+
+  if (listen(socket_fd, WORD_SIZE) < 0) {
+    perror("listen failed\n");
+    exit(EXIT_FAILURE);
+  }
+  return socket_fd;
+}
+
+int connect_tcp_peer(int peer_rank, int my_rank) {
+  int socket_fd;
+  struct sockaddr_in addr;
+  char ip[] = "127.0.0.1";
+  int port = FALL_BACK_PORT + peer_rank;
+  socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+  if (socket_fd < 0) {
+    perror("socket failed\n");
+    exit(EXIT_FAILURE);
+  }
+
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  // addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  // addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  inet_pton(AF_INET, ip, &addr.sin_addr);
+
+  while (connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    usleep(100000); // wait 100ms
+  }
+
+  return socket_fd;
+}
+
 MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
                            int mpi_send_map_fd) {
   MPI_process_info *mpi_process_info =
@@ -189,8 +242,6 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
     perror("malloc failed\n");
     exit(EXIT_FAILURE);
   }
-  mpi_process_info->packet_queqe = NULL;
-  mpi_process_info->ack_queqe = NULL;
 
   mpi_process_info->rank = rank;
 
@@ -206,13 +257,14 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
 
   // Store the single UDP socket - maintaining compatibility with existing
   // structure
-  mpi_process_info->socket_fd = (int *)malloc(WORD_SIZE * sizeof(int));
-  if (mpi_process_info->socket_fd == NULL) {
+  mpi_process_info->socket_udp_fd = (int *)malloc(WORD_SIZE * sizeof(int));
+  if (mpi_process_info->socket_udp_fd == NULL) {
     perror("malloc skoket_fd fail\n");
     exit(EXIT_FAILURE);
   }
-  memset(mpi_process_info->socket_fd, -1, WORD_SIZE * sizeof(int));
-  mpi_process_info->socket_fd[0] = udp_socket_fd; // Store UDP socket at index 0
+  memset(mpi_process_info->socket_udp_fd, -1, WORD_SIZE * sizeof(int));
+  mpi_process_info->socket_udp_fd[0] =
+      udp_socket_fd; // Store UDP socket at index 0
   // Create peer address table for UDP communication
   peer_addrs =
       (struct sockaddr_in *)malloc(WORD_SIZE * sizeof(struct sockaddr_in));
@@ -233,6 +285,37 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
     peer_addrs[i].sin_port = htons(BASE_PORT + i);
     inet_pton(AF_INET, GRECALE_IP, &peer_addrs[i].sin_addr);
   }
+  sleep(1);
+  int *sock_table_tcp = (int *)malloc(WORD_SIZE * sizeof(int));
+  memset(sock_table_tcp, 0xFF, WORD_SIZE * sizeof(int));
+
+  int server_fd = create_tcp_socket(FALL_BACK_PORT + rank);
+
+  for (int i = 0; i < WORD_SIZE; ++i) {
+    usleep(1000); // wait 1ms
+    if (i == rank)
+      continue;
+
+    if (rank < i) {
+      sock_table_tcp[i] = connect_tcp_peer(i, rank);
+      // printf("fd: %d\n", sock_table_tcp);
+    } else if (rank > i) {
+      struct sockaddr_in cli_addr;
+      socklen_t cli_len = sizeof(cli_addr);
+      int conn_fd = accept(server_fd, (struct sockaddr *)&cli_addr, &cli_len);
+      if (conn_fd < 0) {
+
+        perror("fail accept\n");
+        exit(EXIT_FAILURE);
+      }
+      sock_table_tcp[i] = conn_fd;
+    }
+  }
+  mpi_process_info->socket_tcp_fd = sock_table_tcp;
+
+  close(server_fd);
+
+  sleep(1); // Wait until all peers are ready
 
   // Update BPF map with socket information for each potential communication
   // pair
@@ -326,6 +409,16 @@ MPI_process_info *mpi_init(int rank, int mpi_sockets_map_fd,
   // Brief synchronization delay
   sleep(1);
   return mpi_process_info;
+}
+
+int is_empty(int fd) {
+  int bytes = 0;
+  if (ioctl(fd, 0x541B, &bytes) == -1) {
+    perror("ioctl");
+    return -1; // error
+  }
+  printf("bytes: %d\n", bytes);
+  return (bytes == 0); // 1 if empty, 0 if some data waiting
 }
 
 int datatype_size_in_bytes(int count, MPI_Datatype datatype) {
@@ -442,30 +535,18 @@ int bytes_size_in_unit(int count, MPI_Datatype datatype) {
   return res;
 }
 
-static inline list_of_mpihdr *push_mpihder(list_of_mpihdr *mpihdrs,
-                                           mpihdr *mpi_hdr) {
-  if (mpi_hdr == NULL) {
-    perror("mpihdr NULL\n");
-    exit(EXIT_FAILURE);
-  }
-  if (mpihdrs == NULL) {
-    mpihdrs = (list_of_mpihdr *)malloc(sizeof(list_of_mpihdr));
-    mpihdrs->packet = mpi_hdr;
-    mpihdrs->next = NULL;
-    return mpihdrs;
-  }
-  list_of_mpihdr *__mpihdrs = mpihdrs;
-  mpihdrs = (list_of_mpihdr *)malloc(sizeof(list_of_mpihdr));
-  mpihdrs->packet = mpi_hdr;
-  mpihdrs->next = __mpihdrs;
-  return mpihdrs;
-}
+int __mpi_send_tcp(const void *buf, int count, MPI_Datatype datatype, int root,
+                   int dest, int tag, MPI_Collective collective) {
 
-static int __mpi_send_ack_nack(int dest, int tag, unsigned long seq,
-                               unsigned long id, MPI_Datatype datatype,
-                               MPI_Collective collective) {
+  int size = datatype_size_in_bytes(count, datatype);
+  if (size < 1) {
+    return -1;
+  }
 
-  void *message = malloc(MPI_HEADER);
+  // Create message with tag header
+  int total_size = MPI_HEADER + size;
+
+  void *message = malloc(total_size);
   if (!message) {
     perror("malloc failed");
     return -1;
@@ -476,7 +557,7 @@ static int __mpi_send_ack_nack(int dest, int tag, unsigned long seq,
   // printf("%s\n", message);
 
   void *root_send = (char *)message + (sizeof(char) * 4);
-  generic_hton(root_send, &MPI_PROCESS->rank, sizeof(int), 1);
+  generic_hton(root_send, &root, sizeof(int), 1);
 
   void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
   generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
@@ -505,257 +586,361 @@ static int __mpi_send_ack_nack(int dest, int tag, unsigned long seq,
   void *seq_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
                    sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
                    (sizeof(int) * 2);
+  unsigned long long seq = 0;
   generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
 
   void *id_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
                   (sizeof(int) * 2) + sizeof(unsigned long);
-  // generic_hton(id_send, &MPI_PROCESS->ids[dest][MPI_PROCESS->rank],
-  //              sizeof(unsigned long), 1);
-  generic_hton(id_send, &id, sizeof(unsigned long), 1);
+  generic_hton(id_send, &MPI_PROCESS->ids[dest][root], sizeof(unsigned long),
+               1);
 
-  // Add data payload
-
-  // Send UDP message using the global socket and peer address table
-  ssize_t sent =
-      sendto(udp_socket_fd, message, MPI_HEADER, 0,
-             (struct sockaddr *)&peer_addrs[dest], sizeof(struct sockaddr_in));
-
+  void *buf_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2) + sizeof(unsigned long) +
+                   sizeof(unsigned long);
+  switch (datatype) {
+  case MPI_CHAR: {
+    generic_hton(buf_send, buf, sizeof(char), count);
+  } break;
+  case MPI_SIGNED_CHAR: {
+    generic_hton(buf_send, buf, sizeof(signed char), count);
+  } break;
+  case MPI_UNSIGNED_CHAR: {
+    generic_hton(buf_send, buf, sizeof(unsigned char), count);
+  } break;
+  case MPI_SHORT: {
+    generic_hton(buf_send, buf, sizeof(short), count);
+  } break;
+  case MPI_UNSIGNED_SHORT: {
+    generic_hton(buf_send, buf, sizeof(unsigned short), count);
+  } break;
+  case MPI_INT: {
+    generic_hton(buf_send, buf, sizeof(int), count);
+  } break;
+  case MPI_UNSIGNED: {
+    generic_hton(buf_send, buf, sizeof(unsigned), count);
+  } break;
+  case MPI_LONG: {
+    generic_hton(buf_send, buf, sizeof(long), count);
+  } break;
+  case MPI_UNSIGNED_LONG: {
+    generic_hton(buf_send, buf, sizeof(unsigned long), count);
+  } break;
+  case MPI_LONG_LONG: {
+    generic_hton(buf_send, buf, sizeof(long long), count);
+  } break;
+  case MPI_UNSIGNED_LONG_LONG: {
+    generic_hton(buf_send, buf, sizeof(unsigned long long), count);
+  } break;
+  case MPI_FLOAT: {
+    generic_hton(buf_send, buf, sizeof(float), count);
+  } break;
+  case MPI_DOUBLE: {
+    generic_hton(buf_send, buf, sizeof(double), count);
+  } break;
+  case MPI_LONG_DOUBLE: {
+    generic_hton(buf_send, buf, sizeof(long double), count);
+  } break;
+  case MPI_C_BOOL: {
+    generic_hton(buf_send, buf, sizeof(bool), count);
+  } break;
+  case MPI_WCHAR: {
+    generic_hton(buf_send, buf, sizeof(wchar_t), count);
+  } break;
+  default:
+    break;
+  }
+  send(MPI_PROCESS->socket_tcp_fd[dest], message, total_size, 0);
   free(message);
-
-  if (sent != MPI_HEADER) {
-    perror("sendto failed");
+  return count;
+}
+int __mpi_recv_tcp(void *buf, int count, MPI_Datatype datatype, int source,
+                   int tag) {
+  int size = datatype_size_in_bytes(count, datatype);
+  if (size < 1) {
     return -1;
   }
-  return 0;
+
+  int total_size = MPI_HEADER + size;
+  void *message = malloc(total_size);
+  if (!message) {
+    perror("malloc failed");
+    return -1;
+  }
+  size_t total = 0;
+
+  while (total < total_size) {
+
+    ssize_t n = recv(MPI_PROCESS->socket_tcp_fd[source], message + total,
+                     total_size - total, 0);
+    if (n > 0) {
+      total += n;
+    } else {
+      printf("failed recv\n");
+      exit(EXIT_SUCCESS);
+    }
+  }
+
+  char header_mpi[4];
+  generic_ntoh(header_mpi, message, sizeof(char), 4);
+
+  int root;
+  void *root_recv = (char *)message + (sizeof(char) * 4);
+  generic_ntoh(&root, root_recv, sizeof(int), 1);
+
+  int src;
+  void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+  generic_ntoh(&src, src_recv, sizeof(int), 1);
+
+  // if (root != source) {
+  //   perror("root differet from the source\n");
+  //   exit(EXIT_FAILURE);
+  // }
+
+  int dst;
+  void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+  generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+
+  MPI_Collective collective;
+  void *collective_recv =
+      (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+  generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+
+  MPI_Datatype __datatype;
+  void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                        (sizeof(int) * 3) + sizeof(MPI_Collective);
+  generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+
+  int len;
+  void *len_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+  generic_ntoh(&len, len_recv, sizeof(int), 1);
+
+  // Add tag to message header
+  // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+  // 4)))));
+
+  int tag_;
+  void *tag_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) + sizeof(int);
+  generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
+
+  unsigned long seq;
+  void *seq_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2);
+  generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
+
+  unsigned long id;
+  void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                  sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                  (sizeof(int) * 2) + sizeof(unsigned long);
+  generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
+
+  // Extract data payload
+  void *buf_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2) + sizeof(unsigned long) +
+                   sizeof(unsigned long);
+  // int data_size =  - ((sizeof(char) * 4) + (sizeof(int) * 3) +
+  //                             sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+  //                             (sizeof(int) * 2) + sizeof(unsigned long) +
+  //                             sizeof(unsigned long));
+
+  // Convert from network byte order to host byte order
+  switch (datatype) {
+  case MPI_CHAR: {
+    generic_ntoh(buf, buf_recv, sizeof(char), count);
+    // Add null terminator for string data
+    char *buf_char = (char *)buf;
+    buf_char[count] = '\0';
+  } break;
+  case MPI_SIGNED_CHAR: {
+    generic_ntoh(buf, buf_recv, sizeof(signed char), count);
+    signed char *buf_char = (signed char *)buf;
+    buf_char[count] = '\0';
+  } break;
+  case MPI_UNSIGNED_CHAR: {
+    generic_ntoh(buf, buf_recv, sizeof(unsigned char), count);
+    unsigned char *buf_char = (unsigned char *)buf;
+    buf_char[count] = '\0';
+  } break;
+  case MPI_SHORT: {
+    generic_ntoh(buf, buf_recv, sizeof(short), count);
+  } break;
+  case MPI_UNSIGNED_SHORT: {
+    generic_ntoh(buf, buf_recv, sizeof(unsigned short), count);
+  } break;
+  case MPI_INT: {
+    generic_ntoh(buf, buf_recv, sizeof(int), count);
+  } break;
+  case MPI_UNSIGNED: {
+    generic_ntoh(buf, buf_recv, sizeof(unsigned), count);
+  } break;
+  case MPI_LONG: {
+    generic_ntoh(buf, buf_recv, sizeof(long), count);
+  } break;
+  case MPI_UNSIGNED_LONG: {
+    generic_ntoh(buf, buf_recv, sizeof(unsigned long), count);
+  } break;
+  case MPI_LONG_LONG: {
+    generic_ntoh(buf, buf_recv, sizeof(long long), count);
+  } break;
+  case MPI_UNSIGNED_LONG_LONG: {
+    generic_ntoh(buf, buf_recv, sizeof(unsigned long long), count);
+  } break;
+  case MPI_FLOAT: {
+    generic_ntoh(buf, buf_recv, sizeof(float), count);
+  } break;
+  case MPI_DOUBLE: {
+    generic_ntoh(buf, buf_recv, sizeof(double), count);
+  } break;
+  case MPI_LONG_DOUBLE: {
+    generic_ntoh(buf, buf_recv, sizeof(long double), count);
+  } break;
+  case MPI_C_BOOL: {
+    generic_ntoh(buf, buf_recv, sizeof(bool), count);
+  } break;
+  case MPI_WCHAR: {
+    generic_ntoh(buf, buf_recv, sizeof(wchar_t), count);
+    wchar_t *buf_char = (wchar_t *)buf;
+    buf_char[count] = L'\0';
+  } break;
+  default:
+    break;
+  }
+  memcmp(buf, buf_recv, size);
+  free(message);
+  return count;
 }
-static int __mpi_recv_ack_nack(int expected_src, int expected_tag,
-                               unsigned long expected_seq,
-                               unsigned long expected_id,
-                               MPI_Datatype *datatype,
-                               MPI_Collective *collective) {
+
+int __mpi_send_tcp_lost_packet(MPI_Datatype datatype, int root, int dest,
+                               int tag, MPI_Collective collective) {
   void *message = malloc(MPI_HEADER);
   if (!message) {
     perror("malloc failed");
     return -1;
   }
+  char header_mpi[4] = {'M', 'P', 'I', '\0'};
+  void *header_mpi_send = message;
+  generic_hton(header_mpi_send, header_mpi, sizeof(char), 4);
+  // printf("%s\n", message);
 
-  struct sockaddr_in sender_addr;
-  socklen_t sender_len = sizeof(sender_addr);
+  void *root_send = (char *)message + (sizeof(char) * 4);
+  generic_hton(root_send, &root, sizeof(int), 1);
 
-  int max_retries = 10;
-  int retry_count = 0;
+  void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
+  generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
 
-  while (retry_count < max_retries) {
-    // Receive UDP message using the global socket
-    ssize_t received = recvfrom(udp_socket_fd, message, MPI_HEADER, 0,
-                                (struct sockaddr *)&sender_addr, &sender_len);
+  void *dst_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+  generic_hton(dst_send, &dest, sizeof(int), 1);
 
-    if (received < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        // Timeout - retry
-        retry_count++;
-        continue;
-      }
-      free(message);
-      perror("recvfrom failed");
-      return -1;
-    }
+  void *opcode_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+  generic_hton(opcode_send, &collective, sizeof(MPI_Collective), 1);
 
-    if (received < MPI_HEADER) {
-      // Message too short - ignore and continue
-      continue;
-    }
+  void *datatype_send = (char *)message + (sizeof(char) * 4) +
+                        (sizeof(int) * 3) + sizeof(MPI_Collective);
+  generic_hton(datatype_send, &datatype, sizeof(MPI_Datatype), 1);
 
-    // Parse the header
-    char header_mpi[4];
-    generic_ntoh(header_mpi, message, sizeof(char), 4);
+  void *len_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+  int len = 0;
+  generic_hton(len_send, &len, sizeof(int), 1);
 
-    int root, src, dst;
-    MPI_Collective recv_collective;
-    MPI_Datatype recv_datatype;
-    int len, tag;
-    unsigned long seq, id;
+  // Add tag to message header
+  void *tag_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) + sizeof(int);
+  generic_hton(tag_send, &tag, sizeof(int), 1);
+  // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+  // 4)))));
+  void *seq_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2);
+  unsigned long long seq = 0;
+  generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
 
-    void *root_recv = (char *)message + (sizeof(char) * 4);
-    generic_ntoh(&root, root_recv, sizeof(int), 1);
+  void *id_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                  sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                  (sizeof(int) * 2) + sizeof(unsigned long);
+  generic_hton(id_send, &MPI_PROCESS->ids[dest][root], sizeof(unsigned long),
+               1);
 
-    void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
-    generic_ntoh(&src, src_recv, sizeof(int), 1);
+  send(MPI_PROCESS->socket_tcp_fd[dest], message, MPI_HEADER, 0);
+  free(message);
+  return 0;
+}
 
-    void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
-    generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+int __mpi_recv_tcp_lost_packet(MPI_Datatype datatype, int source, int tag) {
 
-    void *collective_recv =
-        (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
-    generic_ntoh(&recv_collective, collective_recv, sizeof(MPI_Collective), 1);
-
-    void *datatype_recv = (char *)message + (sizeof(char) * 4) +
-                          (sizeof(int) * 3) + sizeof(MPI_Collective);
-    generic_ntoh(&recv_datatype, datatype_recv, sizeof(MPI_Datatype), 1);
-
-    void *len_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
-                     sizeof(MPI_Collective) + sizeof(MPI_Datatype);
-    generic_ntoh(&len, len_recv, sizeof(int), 1);
-
-    void *tag_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
-                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                     sizeof(int);
-    generic_ntoh(&tag, tag_recv, sizeof(int), 1);
-
-    void *seq_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
-                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                     (sizeof(int) * 2);
-    generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
-
-    void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
-                    sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                    (sizeof(int) * 2) + sizeof(unsigned long);
-    generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
-
-    // CRITICAL: Filter for ACK/NACK messages only
-    if ((recv_datatype != MPI_ACK && recv_datatype != MPI_NACK)) {
-      // This is a data packet, not an ACK/NACK - ignore it
-      printf("Rank %d: Ignoring non-ACK packet (datatype=%d) while waiting for "
-             "ACK from %d\n",
-             MPI_PROCESS->rank, recv_datatype, expected_src);
-      mpihdr *mpi_hdr = (mpihdr *)malloc(sizeof(mpihdr));
-      mpi_hdr->text = header_mpi;
-      mpi_hdr->root = root;
-      mpi_hdr->src = src;
-      mpi_hdr->dst = dst;
-      mpi_hdr->collective = recv_collective;
-      mpi_hdr->datatype = recv_datatype;
-      mpi_hdr->len = len;
-      mpi_hdr->tag = tag;
-      mpi_hdr->seq = seq;
-      mpi_hdr->id = id;
-      int size = datatype_size_in_bytes(len, recv_datatype);
-      void *data = malloc(size);
-      void *buf_recv = (char *)message + (sizeof(char) * 4) +
-                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                       sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                       sizeof(unsigned long) + sizeof(unsigned long);
-      switch (recv_datatype) {
-      case MPI_CHAR: {
-        generic_ntoh(data, buf_recv, sizeof(char), len);
-        char *buf_char = (char *)data;
-        buf_char[len - 1] = '\0';
-      } break;
-      case MPI_SIGNED_CHAR: {
-        generic_ntoh(data, buf_recv, sizeof(signed char), len);
-        signed char *buf_char = (signed char *)data;
-        buf_char[len - 1] = '\0';
-      } break;
-      case MPI_UNSIGNED_CHAR: {
-        generic_ntoh(data, buf_recv, sizeof(unsigned char), len);
-        unsigned char *buf_char = (unsigned char *)len;
-        buf_char[len - 1] = '\0';
-      } break;
-      case MPI_SHORT: {
-        generic_ntoh(data, buf_recv, sizeof(short), len);
-      } break;
-      case MPI_UNSIGNED_SHORT: {
-        generic_ntoh(data, buf_recv, sizeof(unsigned short), len);
-      } break;
-      case MPI_INT: {
-        generic_ntoh(data, buf_recv, sizeof(int), len);
-      } break;
-      case MPI_UNSIGNED: {
-        generic_ntoh(data, buf_recv, sizeof(unsigned), len);
-      } break;
-      case MPI_LONG: {
-        generic_ntoh(data, buf_recv, sizeof(long), len);
-      } break;
-      case MPI_UNSIGNED_LONG: {
-        generic_ntoh(data, buf_recv, sizeof(unsigned long), len);
-      } break;
-      case MPI_LONG_LONG: {
-        generic_ntoh(data, buf_recv, sizeof(long long), len);
-      } break;
-      case MPI_UNSIGNED_LONG_LONG: {
-        generic_ntoh(data, buf_recv, sizeof(unsigned long long), len);
-      } break;
-      case MPI_FLOAT: {
-        generic_ntoh(data, buf_recv, sizeof(float), len);
-      } break;
-      case MPI_DOUBLE: {
-        generic_ntoh(data, buf_recv, sizeof(double), len);
-      } break;
-      case MPI_LONG_DOUBLE: {
-        generic_ntoh(data, buf_recv, sizeof(long double), len);
-      } break;
-      case MPI_C_BOOL: {
-        generic_ntoh(data, buf_recv, sizeof(bool), len);
-      } break;
-      case MPI_WCHAR: {
-        generic_ntoh(data, buf_recv, sizeof(wchar_t), len);
-        wchar_t *buf_char = (wchar_t *)data;
-        buf_char[len - 1] = L'\0';
-      } break;
-      default:
-        free(message);
-        return -1;
-      }
-      mpi_hdr->data = data;
-      MPI_PROCESS->packet_queqe =
-          push_mpihder(MPI_PROCESS->packet_queqe, mpi_hdr);
-      continue;
-    }
-
-    // Validate the ACK/NACK is for this operation
-    if (src != expected_src) {
-      printf("Rank %d: Ignoring ACK from wrong source %d (expected %d)\n",
-             MPI_PROCESS->rank, src, expected_src);
-      continue;
-    }
-
-    if (tag != expected_tag) {
-      printf("Rank %d: Ignoring ACK with wrong tag %d (expected %d)\n",
-             MPI_PROCESS->rank, tag, expected_tag);
-      continue;
-    }
-
-    if (seq != expected_seq) {
-      printf("Rank %d: Ignoring ACK with wrong seq %lu (expected %lu)\n",
-             MPI_PROCESS->rank, seq, expected_seq);
-      continue;
-    }
-
-    if (id != expected_id) {
-      printf("Rank %d: Ignoring ACK with wrong id %lu (expected %lu)\n",
-             MPI_PROCESS->rank, id, expected_id);
-      if (id > expected_id) {
-        mpihdr *mpi_hdr = (mpihdr *)malloc(sizeof(mpihdr));
-        mpi_hdr->text = header_mpi;
-        mpi_hdr->root = root;
-        mpi_hdr->src = src;
-        mpi_hdr->dst = dst;
-        mpi_hdr->collective = recv_collective;
-        mpi_hdr->datatype = recv_datatype;
-        mpi_hdr->len = len;
-        mpi_hdr->tag = tag;
-        mpi_hdr->seq = seq;
-        mpi_hdr->id = id;
-        mpi_hdr->data = NULL;
-        MPI_PROCESS->ack_queqe = push_mpihder(MPI_PROCESS->ack_queqe, mpi_hdr);
-        continue;
-      }
-      continue;
-    }
-
-    // Valid ACK/NACK received
-    *datatype = recv_datatype;
-    *collective = recv_collective;
-
-    free(message);
-    return 0;
+  void *message = malloc(MPI_HEADER);
+  if (!message) {
+    perror("malloc failed");
+    return -1;
   }
+  memset(message, 0, MAX_PAYLOAD);
+
+  int root;
+  int src;
+  int dst;
+  MPI_Collective collective;
+  MPI_Datatype __datatype;
+  int len;
+  int tag_;
+  unsigned long seq;
+  unsigned long id;
+  // Receive UDP message using the global socket
+
+  int err = recv(MPI_PROCESS->socket_tcp_fd[source], message, MPI_HEADER, 0);
+  if (err == -1) {
+    printf("failed recv\n");
+    exit(EXIT_SUCCESS);
+  }
+  char header_mpi[4];
+  generic_ntoh(header_mpi, message, sizeof(char), 4);
+
+  void *root_recv = (char *)message + (sizeof(char) * 4);
+  generic_ntoh(&root, root_recv, sizeof(int), 1);
+
+  void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+  generic_ntoh(&src, src_recv, sizeof(int), 1);
+
+  void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+  generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+
+  void *collective_recv =
+      (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+  generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+
+  void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                        (sizeof(int) * 3) + sizeof(MPI_Collective);
+  generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+
+  void *len_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+  generic_ntoh(&len, len_recv, sizeof(int), 1);
+
+  // Add tag to message header
+  // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+  // 4)))));
+
+  void *tag_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) + sizeof(int);
+  generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
+
+  void *seq_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2);
+  generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
+
+  void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                  sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                  (sizeof(int) * 2) + sizeof(unsigned long);
+  generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
 
   free(message);
-  fprintf(stderr, "Rank %d: Failed to receive ACK after %d retries\n",
-          MPI_PROCESS->rank, max_retries);
-  return -1;
+
+  return root;
 }
 
 static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
@@ -777,7 +962,6 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
     const size_t N = (size_t)ceil((double)size / (double)(PAYLOAD_SIZE));
     size_t rem = size % N;
     while (offset < size) {
-      MPI_Datatype ack = 0;
       const size_t __PAYLOAD_SIZE = (size - offset) > PAYLOAD_SIZE
                                         ? PAYLOAD_SIZE
                                         : size - ((N - 1) * PAYLOAD_SIZE);
@@ -787,173 +971,6 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
         perror("malloc failed");
         return -1;
       }
-      do {
-        char header_mpi[4] = {'M', 'P', 'I', '\0'};
-        void *header_mpi_send = message;
-        generic_hton(header_mpi_send, header_mpi, sizeof(char), 4);
-        // printf("%s\n", message);
-
-        void *root_send = (char *)message + (sizeof(char) * 4);
-        generic_hton(root_send, &root, sizeof(int), 1);
-
-        void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
-        generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
-
-        void *dst_send =
-            (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
-        generic_hton(dst_send, &dest, sizeof(int), 1);
-
-        void *opcode_send =
-            (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
-        generic_hton(opcode_send, &collective, sizeof(MPI_Collective), 1);
-
-        void *datatype_send = (char *)message + (sizeof(char) * 4) +
-                              (sizeof(int) * 3) + sizeof(MPI_Collective);
-        generic_hton(datatype_send, &datatype, sizeof(MPI_Datatype), 1);
-
-        void *len_send = (char *)message + (sizeof(char) * 4) +
-                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                         sizeof(MPI_Datatype);
-        generic_hton(len_send, &__PAYLOAD_SIZE, sizeof(int), 1);
-
-        // Add tag to message header
-        void *tag_send = (char *)message + (sizeof(char) * 4) +
-                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                         sizeof(MPI_Datatype) + sizeof(int);
-        generic_hton(tag_send, &tag, sizeof(int), 1);
-        // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
-        // 4)))));
-        void *seq_send = (char *)message + (sizeof(char) * 4) +
-                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                         sizeof(MPI_Datatype) + (sizeof(int) * 2);
-        generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
-
-        void *id_send = (char *)message + (sizeof(char) * 4) +
-                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                        sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                        sizeof(unsigned long);
-        generic_hton(id_send, &MPI_PROCESS->ids[root][dest],
-                     sizeof(unsigned long), 1);
-
-        // Add data payload
-        void *buf_send = (char *)message + (sizeof(char) * 4) +
-                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                         sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                         sizeof(unsigned long) + sizeof(unsigned long);
-
-        void *bufptr = NULL;
-        switch (datatype) {
-        case MPI_CHAR:
-          bufptr = (void *)((char *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(char), __PAYLOAD_SIZE);
-          // printf("rank: %d len: %d\n", MPI_PROCESS->rank, strlen(buf_send));
-          break;
-        case MPI_SIGNED_CHAR:
-          bufptr = (void *)((signed char *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(signed char), __PAYLOAD_SIZE);
-          break;
-        case MPI_UNSIGNED_CHAR:
-          bufptr = (void *)((unsigned char *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(unsigned char), __PAYLOAD_SIZE);
-          break;
-        case MPI_SHORT:
-          bufptr = (void *)((short *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(short), __PAYLOAD_SIZE);
-          break;
-        case MPI_UNSIGNED_SHORT:
-          bufptr = (void *)((unsigned short *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(unsigned short),
-                       __PAYLOAD_SIZE);
-          break;
-        case MPI_INT:
-          bufptr = (void *)((int *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(int), __PAYLOAD_SIZE);
-          break;
-        case MPI_UNSIGNED:
-          bufptr = (void *)((unsigned *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(unsigned), __PAYLOAD_SIZE);
-          break;
-        case MPI_LONG:
-          bufptr = (void *)((long *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(long), __PAYLOAD_SIZE);
-          break;
-        case MPI_UNSIGNED_LONG:
-          bufptr = (void *)((unsigned long *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(unsigned long), __PAYLOAD_SIZE);
-          break;
-        case MPI_LONG_LONG:
-          bufptr = (void *)((long long *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(long long), __PAYLOAD_SIZE);
-          break;
-        case MPI_UNSIGNED_LONG_LONG:
-          bufptr = (void *)((unsigned long long *)buf + offset);
-          generic_hton(buf_send, buf, sizeof(unsigned long long),
-                       __PAYLOAD_SIZE);
-          break;
-        case MPI_FLOAT:
-          bufptr = (void *)((float *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(float), __PAYLOAD_SIZE);
-          break;
-        case MPI_DOUBLE:
-          bufptr = (void *)((double *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(double), __PAYLOAD_SIZE);
-          break;
-        case MPI_LONG_DOUBLE:
-          bufptr = (void *)((long double *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(long double), __PAYLOAD_SIZE);
-          break;
-        case MPI_C_BOOL:
-          bufptr = (void *)((bool *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(bool), __PAYLOAD_SIZE);
-          break;
-        case MPI_WCHAR:
-          bufptr = (void *)((wchar_t *)buf + offset);
-          generic_hton(buf_send, bufptr, sizeof(wchar_t), __PAYLOAD_SIZE);
-          break;
-        default:
-          free(message);
-          return -1;
-        }
-
-        // Send UDP message using the global socket and peer address table
-        ssize_t sent = sendto(udp_socket_fd, message, MAX_PAYLOAD, 0,
-                              (struct sockaddr *)&peer_addrs[dest],
-                              sizeof(struct sockaddr_in));
-
-        if (sent != (MAX_PAYLOAD)) {
-          perror("sendto failed");
-          return -1;
-        }
-        MPI_Datatype ack = 0;
-        MPI_Collective _collective = 0;
-        __mpi_recv_ack_nack(dest, tag, seq,
-                            MPI_PROCESS->ids[MPI_PROCESS->rank][dest], &ack,
-                            &_collective);
-        printf("rank: %d\nsrc:%d \ntag: %d\nseq: %lu\nid: "
-               "%lu\nack: %d\ncolletive: %d\n",
-               MPI_PROCESS->rank, dest, tag, seq,
-               MPI_PROCESS->ids[MPI_PROCESS->rank][dest], ack, _collective);
-        /* code */
-      } while (ack != MPI_ACK);
-
-      seq += 1;
-      offset += PAYLOAD_SIZE;
-      // printf("rank: %d dst: %d seq: %d\n", MPI_PROCESS->rank, dest, seq);
-      // usleep(100);
-      // if (i % 2 == 0) {
-      free(message);
-
-      // usleep(1000);
-    }
-    MPI_PROCESS->ids[root][dest] += 1;
-  } else {
-    MPI_Datatype ack = 0;
-    void *message = malloc(total_size);
-    if (!message) {
-      perror("malloc failed");
-      return -1;
-    }
-    do {
       char header_mpi[4] = {'M', 'P', 'I', '\0'};
       void *header_mpi_send = message;
       generic_hton(header_mpi_send, header_mpi, sizeof(char), 4);
@@ -979,7 +996,7 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       void *len_send = (char *)message + (sizeof(char) * 4) +
                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
                        sizeof(MPI_Datatype);
-      generic_hton(len_send, &count, sizeof(int), 1);
+      generic_hton(len_send, &__PAYLOAD_SIZE, sizeof(int), 1);
 
       // Add tag to message header
       void *tag_send = (char *)message + (sizeof(char) * 4) +
@@ -1004,54 +1021,74 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
                        sizeof(MPI_Datatype) + (sizeof(int) * 2) +
                        sizeof(unsigned long) + sizeof(unsigned long);
+
+      void *bufptr = NULL;
       switch (datatype) {
       case MPI_CHAR:
-        generic_hton(buf_send, buf, sizeof(char), count);
+        bufptr = (void *)((char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(char), __PAYLOAD_SIZE);
+        // printf("rank: %d len: %d\n", MPI_PROCESS->rank,
+        // strlen(buf_send));
         break;
       case MPI_SIGNED_CHAR:
-        generic_hton(buf_send, buf, sizeof(signed char), count);
+        bufptr = (void *)((signed char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(signed char), __PAYLOAD_SIZE);
         break;
       case MPI_UNSIGNED_CHAR:
-        generic_hton(buf_send, buf, sizeof(unsigned char), count);
+        bufptr = (void *)((unsigned char *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned char), __PAYLOAD_SIZE);
         break;
       case MPI_SHORT:
-        generic_hton(buf_send, buf, sizeof(short), count);
+        bufptr = (void *)((short *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(short), __PAYLOAD_SIZE);
         break;
       case MPI_UNSIGNED_SHORT:
-        generic_hton(buf_send, buf, sizeof(unsigned short), count);
+        bufptr = (void *)((unsigned short *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned short), __PAYLOAD_SIZE);
         break;
       case MPI_INT:
-        generic_hton(buf_send, buf, sizeof(int), count);
+        bufptr = (void *)((int *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(int), __PAYLOAD_SIZE);
         break;
       case MPI_UNSIGNED:
-        generic_hton(buf_send, buf, sizeof(unsigned), count);
+        bufptr = (void *)((unsigned *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned), __PAYLOAD_SIZE);
         break;
       case MPI_LONG:
-        generic_hton(buf_send, buf, sizeof(long), count);
+        bufptr = (void *)((long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long), __PAYLOAD_SIZE);
         break;
       case MPI_UNSIGNED_LONG:
-        generic_hton(buf_send, buf, sizeof(unsigned long), count);
+        bufptr = (void *)((unsigned long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(unsigned long), __PAYLOAD_SIZE);
         break;
       case MPI_LONG_LONG:
-        generic_hton(buf_send, buf, sizeof(long long), count);
+        bufptr = (void *)((long long *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long long), __PAYLOAD_SIZE);
         break;
       case MPI_UNSIGNED_LONG_LONG:
-        generic_hton(buf_send, buf, sizeof(unsigned long long), count);
+        bufptr = (void *)((unsigned long long *)buf + offset);
+        generic_hton(buf_send, buf, sizeof(unsigned long long), __PAYLOAD_SIZE);
         break;
       case MPI_FLOAT:
-        generic_hton(buf_send, buf, sizeof(float), count);
+        bufptr = (void *)((float *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(float), __PAYLOAD_SIZE);
         break;
       case MPI_DOUBLE:
-        generic_hton(buf_send, buf, sizeof(double), count);
+        bufptr = (void *)((double *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(double), __PAYLOAD_SIZE);
         break;
       case MPI_LONG_DOUBLE:
-        generic_hton(buf_send, buf, sizeof(long double), count);
+        bufptr = (void *)((long double *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(long double), __PAYLOAD_SIZE);
         break;
       case MPI_C_BOOL:
-        generic_hton(buf_send, buf, sizeof(bool), count);
+        bufptr = (void *)((bool *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(bool), __PAYLOAD_SIZE);
         break;
       case MPI_WCHAR:
-        generic_hton(buf_send, buf, sizeof(wchar_t), count);
+        bufptr = (void *)((wchar_t *)buf + offset);
+        generic_hton(buf_send, bufptr, sizeof(wchar_t), __PAYLOAD_SIZE);
         break;
       default:
         free(message);
@@ -1059,29 +1096,151 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
       }
 
       // Send UDP message using the global socket and peer address table
-      ssize_t sent = sendto(udp_socket_fd, message, total_size, 0,
+      ssize_t sent = sendto(udp_socket_fd, message, MAX_PAYLOAD, 0,
                             (struct sockaddr *)&peer_addrs[dest],
                             sizeof(struct sockaddr_in));
 
-      //                   ssize_t sent = sendto_with_backpressure(
-      // udp_socket_fd, message, total_size,
-      // (struct sockaddr *)&peer_addrs[dest],
-      // sizeof(struct sockaddr_in));
-      if (sent != total_size) {
+      if (sent != (MAX_PAYLOAD)) {
         perror("sendto failed");
         return -1;
       }
-      MPI_Datatype ack = 0;
-      MPI_Collective _collective = 0;
-      __mpi_recv_ack_nack(dest, tag, seq,
-                          MPI_PROCESS->ids[MPI_PROCESS->rank][dest], &ack,
-                          &_collective);
-      printf("rank: %d\nsrc:%d \ntag: %d\nseq: %lu\nid: "
-             "%lu\nack: %d\ncolletive: %d\n",
-             MPI_PROCESS->rank, dest, tag, seq,
-             MPI_PROCESS->ids[MPI_PROCESS->rank][dest], ack, _collective);
+      usleep(1000);
 
-    } while (ack != MPI_ACK);
+      seq += 1;
+      offset += PAYLOAD_SIZE;
+      // printf("rank: %d dst: %d seq: %d\n", MPI_PROCESS->rank, dest, seq);
+      // usleep(100);
+      // if (i % 2 == 0) {
+      free(message);
+
+      // usleep(1000);
+    }
+    MPI_PROCESS->ids[root][dest] += 1;
+  } else {
+    MPI_Datatype ack = 0;
+    void *message = malloc(total_size);
+    if (!message) {
+      perror("malloc failed");
+      return -1;
+    }
+    char header_mpi[4] = {'M', 'P', 'I', '\0'};
+    void *header_mpi_send = message;
+    generic_hton(header_mpi_send, header_mpi, sizeof(char), 4);
+    // printf("%s\n", message);
+
+    void *root_send = (char *)message + (sizeof(char) * 4);
+    generic_hton(root_send, &root, sizeof(int), 1);
+
+    void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
+    generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
+
+    void *dst_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+    generic_hton(dst_send, &dest, sizeof(int), 1);
+
+    void *opcode_send =
+        (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+    generic_hton(opcode_send, &collective, sizeof(MPI_Collective), 1);
+
+    void *datatype_send = (char *)message + (sizeof(char) * 4) +
+                          (sizeof(int) * 3) + sizeof(MPI_Collective);
+    generic_hton(datatype_send, &datatype, sizeof(MPI_Datatype), 1);
+
+    void *len_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+    generic_hton(len_send, &count, sizeof(int), 1);
+
+    // Add tag to message header
+    void *tag_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     sizeof(int);
+    generic_hton(tag_send, &tag, sizeof(int), 1);
+    // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+    // 4)))));
+    void *seq_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     (sizeof(int) * 2);
+    generic_hton(seq_send, &seq, sizeof(unsigned long), 1);
+
+    void *id_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                    sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                    (sizeof(int) * 2) + sizeof(unsigned long);
+    generic_hton(id_send, &MPI_PROCESS->ids[root][dest], sizeof(unsigned long),
+                 1);
+
+    // Add data payload
+    void *buf_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     (sizeof(int) * 2) + sizeof(unsigned long) +
+                     sizeof(unsigned long);
+    switch (datatype) {
+    case MPI_CHAR:
+      generic_hton(buf_send, buf, sizeof(char), count);
+      break;
+    case MPI_SIGNED_CHAR:
+      generic_hton(buf_send, buf, sizeof(signed char), count);
+      break;
+    case MPI_UNSIGNED_CHAR:
+      generic_hton(buf_send, buf, sizeof(unsigned char), count);
+      break;
+    case MPI_SHORT:
+      generic_hton(buf_send, buf, sizeof(short), count);
+      break;
+    case MPI_UNSIGNED_SHORT:
+      generic_hton(buf_send, buf, sizeof(unsigned short), count);
+      break;
+    case MPI_INT:
+      generic_hton(buf_send, buf, sizeof(int), count);
+      break;
+    case MPI_UNSIGNED:
+      generic_hton(buf_send, buf, sizeof(unsigned), count);
+      break;
+    case MPI_LONG:
+      generic_hton(buf_send, buf, sizeof(long), count);
+      break;
+    case MPI_UNSIGNED_LONG:
+      generic_hton(buf_send, buf, sizeof(unsigned long), count);
+      break;
+    case MPI_LONG_LONG:
+      generic_hton(buf_send, buf, sizeof(long long), count);
+      break;
+    case MPI_UNSIGNED_LONG_LONG:
+      generic_hton(buf_send, buf, sizeof(unsigned long long), count);
+      break;
+    case MPI_FLOAT:
+      generic_hton(buf_send, buf, sizeof(float), count);
+      break;
+    case MPI_DOUBLE:
+      generic_hton(buf_send, buf, sizeof(double), count);
+      break;
+    case MPI_LONG_DOUBLE:
+      generic_hton(buf_send, buf, sizeof(long double), count);
+      break;
+    case MPI_C_BOOL:
+      generic_hton(buf_send, buf, sizeof(bool), count);
+      break;
+    case MPI_WCHAR:
+      generic_hton(buf_send, buf, sizeof(wchar_t), count);
+      break;
+    default:
+      free(message);
+      return -1;
+    }
+
+    // Send UDP message using the global socket and peer address table
+    ssize_t sent = sendto(udp_socket_fd, message, total_size, 0,
+                          (struct sockaddr *)&peer_addrs[dest],
+                          sizeof(struct sockaddr_in));
+    usleep(1000);
+
+    //                   ssize_t sent = sendto_with_backpressure(
+    // udp_socket_fd, message, total_size,
+    // (struct sockaddr *)&peer_addrs[dest],
+    // sizeof(struct sockaddr_in));
+    if (sent != total_size) {
+      perror("sendto failed");
+      return -1;
+    }
+    usleep(1000);
     MPI_PROCESS->ids[root][dest] += 1;
 
     free(message);
@@ -1092,9 +1251,86 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
 
 int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
              int tag) {
+  int sent = 0;
 
-  return __mpi_send(buf, count, datatype, MPI_PROCESS->rank, dest, tag,
-                    MPI_SEND);
+  // if (MPI_PROCESS->rank != 0) {
+  //   __mpi_send(buf, count, datatype, MPI_PROCESS->rank, dest, tag, MPI_SEND);
+  // }
+  __mpi_send(buf, count, datatype, MPI_PROCESS->rank, dest, tag, MPI_SEND);
+
+  // if (!is_empty(MPI_PROCESS->socket_tcp_fd[i])) {
+  void *message = malloc(MPI_HEADER);
+  if (!message) {
+    perror("malloc failed");
+    return -1;
+  }
+  int root;
+  int src;
+  int dst;
+  MPI_Collective collective;
+  MPI_Datatype __datatype;
+  int len;
+  int tag_;
+  unsigned long seq;
+  unsigned long id;
+  // Receive UDP message using the global socket
+
+  int err = recv(MPI_PROCESS->socket_tcp_fd[dest], message, MPI_HEADER, 0);
+  if (err == -1) {
+    printf("failed recv\n");
+    exit(EXIT_SUCCESS);
+  }
+  char header_mpi[4];
+  generic_ntoh(header_mpi, message, sizeof(char), 4);
+
+  void *root_recv = (char *)message + (sizeof(char) * 4);
+  generic_ntoh(&root, root_recv, sizeof(int), 1);
+
+  void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+  generic_ntoh(&src, src_recv, sizeof(int), 1);
+
+  void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+  generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+
+  void *collective_recv =
+      (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+  generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+
+  void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                        (sizeof(int) * 3) + sizeof(MPI_Collective);
+  generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+
+  void *len_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+  generic_ntoh(&len, len_recv, sizeof(int), 1);
+
+  // Add tag to message header
+  // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+  // 4)))));
+
+  void *tag_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) + sizeof(int);
+  generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
+
+  void *seq_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                   (sizeof(int) * 2);
+  generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
+
+  void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                  sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                  (sizeof(int) * 2) + sizeof(unsigned long);
+  generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
+  if (__datatype == MPI_NACK) {
+
+    sent = __mpi_send_tcp(buf, count, datatype, MPI_PROCESS->rank, root, tag,
+                          MPI_SEND);
+
+    free(message);
+    // }
+  }
+
+  return sent;
 }
 
 void print_mpi_message(void *buf, int length, MPI_Datatype datatype) {
@@ -1270,232 +1506,135 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
       unsigned long id;
       void *buf_recv;
       // Receive UDP message using the global socket
-      do {
-        ssize_t received =
-            recvfrom(udp_socket_fd, message, MAX_PAYLOAD, 0,
-                     (struct sockaddr *)&sender_addr, &sender_len);
+      ssize_t received = recvfrom(udp_socket_fd, message, MAX_PAYLOAD, 0,
+                                  (struct sockaddr *)&sender_addr, &sender_len);
 
-        if (received < sizeof(int)) {
-          free(message);
-          printf("failed recv - message too short\n");
-          return -1;
-        }
-        char header_mpi[4];
-        generic_ntoh(header_mpi, message, sizeof(char), 4);
+      if (received < sizeof(int)) {
+        free(message);
+        printf("failed recv - message too short\n");
+        return -1;
+      }
+      char header_mpi[4];
+      generic_ntoh(header_mpi, message, sizeof(char), 4);
 
-        void *root_recv = (char *)message + (sizeof(char) * 4);
-        generic_ntoh(&root, root_recv, sizeof(int), 1);
+      void *root_recv = (char *)message + (sizeof(char) * 4);
+      generic_ntoh(&root, root_recv, sizeof(int), 1);
 
-        void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
-        generic_ntoh(&src, src_recv, sizeof(int), 1);
+      void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+      generic_ntoh(&src, src_recv, sizeof(int), 1);
 
-        void *dst_recv =
-            (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
-        generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+      void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+      generic_ntoh(&dst, dst_recv, sizeof(int), 1);
 
-        void *collective_recv =
-            (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
-        generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+      void *collective_recv =
+          (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+      generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
 
-        void *datatype_recv = (char *)message + (sizeof(char) * 4) +
-                              (sizeof(int) * 3) + sizeof(MPI_Collective);
-        generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+      void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                            (sizeof(int) * 3) + sizeof(MPI_Collective);
+      generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
 
-        void *len_recv = (char *)message + (sizeof(char) * 4) +
-                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                         sizeof(MPI_Datatype);
-        generic_ntoh(&len, len_recv, sizeof(int), 1);
+      void *len_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype);
+      generic_ntoh(&len, len_recv, sizeof(int), 1);
 
-        // Add tag to message header
-        // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
-        // 4)))));
+      // Add tag to message header
+      // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+      // 4)))));
 
-        void *tag_recv = (char *)message + (sizeof(char) * 4) +
-                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                         sizeof(MPI_Datatype) + sizeof(int);
-        generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
+      void *tag_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + sizeof(int);
+      generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
 
-        void *seq_recv = (char *)message + (sizeof(char) * 4) +
-                         (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                         sizeof(MPI_Datatype) + (sizeof(int) * 2);
-        generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
+      void *seq_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2);
+      generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
 
-        void *id_recv = (char *)message + (sizeof(char) * 4) +
-                        (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                        sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                        sizeof(unsigned long);
-        generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
+      void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                      sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                      (sizeof(int) * 2) + sizeof(unsigned long);
+      generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
 
-        // Extract data payload
-        buf_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
-                   sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                   (sizeof(int) * 2) + sizeof(unsigned long) +
-                   sizeof(unsigned long);
-        int data_size =
-            received -
-            ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-             sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long) +
-             sizeof(unsigned long));
+      // Extract data payload
+      buf_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                 sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                 (sizeof(int) * 2) + sizeof(unsigned long) +
+                 sizeof(unsigned long);
+      int data_size =
+          received -
+          ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
+           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long) +
+           sizeof(unsigned long));
 
-        if (data_size != PAYLOAD_SIZE && data_size != FINAL_SEND) {
-          __mpi_send_ack_nack(source, tag, seq,
-                              MPI_PROCESS->ids[source][MPI_PROCESS->rank],
-                              MPI_NACK, MPI_SEND);
-          if (id > MPI_PROCESS->ids[source][MPI_PROCESS->rank]) {
-            mpihdr *mpi_hdr = (mpihdr *)malloc(sizeof(mpihdr));
-            mpi_hdr->text = header_mpi;
-            mpi_hdr->root = root;
-            mpi_hdr->src = src;
-            mpi_hdr->dst = dst;
-            mpi_hdr->collective = collective;
-            mpi_hdr->datatype = __datatype;
-            mpi_hdr->len = len;
-            mpi_hdr->tag = tag;
-            mpi_hdr->seq = seq;
-            mpi_hdr->id = id;
-            int size = datatype_size_in_bytes(len, __datatype);
-            void *data = malloc(size);
-            void *buf_recv = (char *)message + (sizeof(char) * 4) +
-                             (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                             sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                             sizeof(unsigned long) + sizeof(unsigned long);
-            switch (__datatype) {
-            case MPI_CHAR: {
-              generic_ntoh(data, buf_recv, sizeof(char), len);
-              char *buf_char = (char *)data;
-              buf_char[len - 1] = '\0';
-            } break;
-            case MPI_SIGNED_CHAR: {
-              generic_ntoh(data, buf_recv, sizeof(signed char), len);
-              signed char *buf_char = (signed char *)data;
-              buf_char[len - 1] = '\0';
-            } break;
-            case MPI_UNSIGNED_CHAR: {
-              generic_ntoh(data, buf_recv, sizeof(unsigned char), len);
-              unsigned char *buf_char = (unsigned char *)len;
-              buf_char[len - 1] = '\0';
-            } break;
-            case MPI_SHORT: {
-              generic_ntoh(data, buf_recv, sizeof(short), len);
-            } break;
-            case MPI_UNSIGNED_SHORT: {
-              generic_ntoh(data, buf_recv, sizeof(unsigned short), len);
-            } break;
-            case MPI_INT: {
-              generic_ntoh(data, buf_recv, sizeof(int), len);
-            } break;
-            case MPI_UNSIGNED: {
-              generic_ntoh(data, buf_recv, sizeof(unsigned), len);
-            } break;
-            case MPI_LONG: {
-              generic_ntoh(data, buf_recv, sizeof(long), len);
-            } break;
-            case MPI_UNSIGNED_LONG: {
-              generic_ntoh(data, buf_recv, sizeof(unsigned long), len);
-            } break;
-            case MPI_LONG_LONG: {
-              generic_ntoh(data, buf_recv, sizeof(long long), len);
-            } break;
-            case MPI_UNSIGNED_LONG_LONG: {
-              generic_ntoh(data, buf_recv, sizeof(unsigned long long), len);
-            } break;
-            case MPI_FLOAT: {
-              generic_ntoh(data, buf_recv, sizeof(float), len);
-            } break;
-            case MPI_DOUBLE: {
-              generic_ntoh(data, buf_recv, sizeof(double), len);
-            } break;
-            case MPI_LONG_DOUBLE: {
-              generic_ntoh(data, buf_recv, sizeof(long double), len);
-            } break;
-            case MPI_C_BOOL: {
-              generic_ntoh(data, buf_recv, sizeof(bool), len);
-            } break;
-            case MPI_WCHAR: {
-              generic_ntoh(data, buf_recv, sizeof(wchar_t), len);
-              wchar_t *buf_char = (wchar_t *)data;
-              buf_char[len - 1] = L'\0';
-            } break;
-            default:
-              free(message);
-              return -1;
-            }
-            mpi_hdr->data = data;
-            MPI_PROCESS->packet_queqe =
-                push_mpihder(MPI_PROCESS->packet_queqe, mpi_hdr);
-
-            // Convert from network byte order to host byte order
-            switch (datatype) {
-            case MPI_CHAR: {
-              generic_ntoh(buf, buf_recv, sizeof(char), count);
-              char *buf_char = (char *)buf;
-              buf_char[count - 1] = '\0';
-            } break;
-            case MPI_SIGNED_CHAR: {
-              generic_ntoh(buf, buf_recv, sizeof(signed char), count);
-              signed char *buf_char = (signed char *)buf;
-              buf_char[count - 1] = '\0';
-            } break;
-            case MPI_UNSIGNED_CHAR: {
-              generic_ntoh(buf, buf_recv, sizeof(unsigned char), count);
-              unsigned char *buf_char = (unsigned char *)buf;
-              buf_char[count - 1] = '\0';
-            } break;
-            case MPI_SHORT: {
-              generic_ntoh(buf, buf_recv, sizeof(short), count);
-            } break;
-            case MPI_UNSIGNED_SHORT: {
-              generic_ntoh(buf, buf_recv, sizeof(unsigned short), count);
-            } break;
-            case MPI_INT: {
-              generic_ntoh(buf, buf_recv, sizeof(int), count);
-            } break;
-            case MPI_UNSIGNED: {
-              generic_ntoh(buf, buf_recv, sizeof(unsigned), count);
-            } break;
-            case MPI_LONG: {
-              generic_ntoh(buf, buf_recv, sizeof(long), count);
-            } break;
-            case MPI_UNSIGNED_LONG: {
-              generic_ntoh(buf, buf_recv, sizeof(unsigned long), count);
-            } break;
-            case MPI_LONG_LONG: {
-              generic_ntoh(buf, buf_recv, sizeof(long long), count);
-            } break;
-            case MPI_UNSIGNED_LONG_LONG: {
-              generic_ntoh(buf, buf_recv, sizeof(unsigned long long), count);
-            } break;
-            case MPI_FLOAT: {
-              generic_ntoh(buf, buf_recv, sizeof(float), count);
-            } break;
-            case MPI_DOUBLE: {
-              generic_ntoh(buf, buf_recv, sizeof(double), count);
-            } break;
-            case MPI_LONG_DOUBLE: {
-              generic_ntoh(buf, buf_recv, sizeof(long double), count);
-            } break;
-            case MPI_C_BOOL: {
-              generic_ntoh(buf, buf_recv, sizeof(bool), count);
-            } break;
-            case MPI_WCHAR: {
-              generic_ntoh(buf, buf_recv, sizeof(wchar_t), count);
-              wchar_t *buf_char = (wchar_t *)buf;
-              buf_char[count - 1] = L'\0';
-            } break;
-            default:
-              free(message);
-              return -1;
-            }
-          }
-
-          // printf("");
-        } else {
-          ack_flag = 1;
-          __mpi_send_ack_nack(root, tag_, seq,
-                              MPI_PROCESS->ids[source][MPI_PROCESS->rank],
-                              MPI_ACK, MPI_SEND);
-        }
-      } while (ack_flag != 1);
+      if (data_size != PAYLOAD_SIZE && data_size != FINAL_SEND) {
+        perror("data size diff of what do i expect\n");
+        exit(EXIT_FAILURE);
+      }
+      // Convert from network byte order to host byte order
+      switch (datatype) {
+      case MPI_CHAR: {
+        generic_ntoh(buf, buf_recv, sizeof(char), count);
+        char *buf_char = (char *)buf;
+        buf_char[count - 1] = '\0';
+      } break;
+      case MPI_SIGNED_CHAR: {
+        generic_ntoh(buf, buf_recv, sizeof(signed char), count);
+        signed char *buf_char = (signed char *)buf;
+        buf_char[count - 1] = '\0';
+      } break;
+      case MPI_UNSIGNED_CHAR: {
+        generic_ntoh(buf, buf_recv, sizeof(unsigned char), count);
+        unsigned char *buf_char = (unsigned char *)buf;
+        buf_char[count - 1] = '\0';
+      } break;
+      case MPI_SHORT: {
+        generic_ntoh(buf, buf_recv, sizeof(short), count);
+      } break;
+      case MPI_UNSIGNED_SHORT: {
+        generic_ntoh(buf, buf_recv, sizeof(unsigned short), count);
+      } break;
+      case MPI_INT: {
+        generic_ntoh(buf, buf_recv, sizeof(int), count);
+      } break;
+      case MPI_UNSIGNED: {
+        generic_ntoh(buf, buf_recv, sizeof(unsigned), count);
+      } break;
+      case MPI_LONG: {
+        generic_ntoh(buf, buf_recv, sizeof(long), count);
+      } break;
+      case MPI_UNSIGNED_LONG: {
+        generic_ntoh(buf, buf_recv, sizeof(unsigned long), count);
+      } break;
+      case MPI_LONG_LONG: {
+        generic_ntoh(buf, buf_recv, sizeof(long long), count);
+      } break;
+      case MPI_UNSIGNED_LONG_LONG: {
+        generic_ntoh(buf, buf_recv, sizeof(unsigned long long), count);
+      } break;
+      case MPI_FLOAT: {
+        generic_ntoh(buf, buf_recv, sizeof(float), count);
+      } break;
+      case MPI_DOUBLE: {
+        generic_ntoh(buf, buf_recv, sizeof(double), count);
+      } break;
+      case MPI_LONG_DOUBLE: {
+        generic_ntoh(buf, buf_recv, sizeof(long double), count);
+      } break;
+      case MPI_C_BOOL: {
+        generic_ntoh(buf, buf_recv, sizeof(bool), count);
+      } break;
+      case MPI_WCHAR: {
+        generic_ntoh(buf, buf_recv, sizeof(wchar_t), count);
+        wchar_t *buf_char = (wchar_t *)buf;
+        buf_char[count - 1] = L'\0';
+      } break;
+      default:
+        free(message);
+        return -1;
+      }
       fragment[seq].len = len;
       const int __size = datatype_size_in_bytes(len, datatype);
       // printf("size: %d\n", __size);
@@ -1603,10 +1742,11 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
         char *buf_char = (char *)buf;
         buf_char[count - 1] = '\0';
         // printf("rank: %d 0\n%s\n", MPI_PROCESS->rank, (char *)bufptr);
-        // printf("1. rank: %d  char: %s seq: %lu buf: %p bufptr: %p len: %lu "
+        // printf("1. rank: %d  char: %s seq: %lu buf: %p bufptr: %p len: %lu
+        // "
         //        "offset: %d len__: %d\n",
-        //        MPI_PROCESS->rank, ((char *)fragment[i].arr), i, buf, bufptr,
-        //        fragment[i].len, offset, strlen(fragment[i].arr));
+        //        MPI_PROCESS->rank, ((char *)fragment[i].arr), i, buf,
+        //        bufptr, fragment[i].len, offset, strlen(fragment[i].arr));
         // print_mpi_message(buf_recv, chunk, MPI_CHAR);
       } break;
       case MPI_SIGNED_CHAR: {
@@ -1703,252 +1843,171 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
       return -1;
     }
 
-    short ack_flag = 0;
     struct sockaddr_in sender_addr;
     socklen_t sender_len = sizeof(sender_addr);
 
     // Receive UDP message using the global socket
-    do {
-      ssize_t received = recvfrom(udp_socket_fd, message, total_size, 0,
-                                  (struct sockaddr *)&sender_addr, &sender_len);
+    ssize_t received = recvfrom(udp_socket_fd, message, total_size, 0,
+                                (struct sockaddr *)&sender_addr, &sender_len);
 
-      if (received < sizeof(int)) {
-        free(message);
-        printf("failed recv - message too short\n");
-        return -1;
+    if (received < sizeof(int)) {
+      free(message);
+      __mpi_send_tcp_lost_packet(MPI_NACK, MPI_PROCESS->rank, source, tag,
+                                 MPI_SEND);
+      int err = __mpi_recv_tcp(buf, count, datatype, source, tag);
+
+      if (source >= 0) {
+        MPI_PROCESS->ids[source][MPI_PROCESS->rank] += 1;
       }
-      char header_mpi[4];
-      generic_ntoh(header_mpi, message, sizeof(char), 4);
+      return err;
+    }
+    char header_mpi[4];
+    generic_ntoh(header_mpi, message, sizeof(char), 4);
 
-      int root;
-      void *root_recv = (char *)message + (sizeof(char) * 4);
-      generic_ntoh(&root, root_recv, sizeof(int), 1);
+    int root;
+    void *root_recv = (char *)message + (sizeof(char) * 4);
+    generic_ntoh(&root, root_recv, sizeof(int), 1);
 
-      int src;
-      void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
-      generic_ntoh(&src, src_recv, sizeof(int), 1);
+    int src;
+    void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+    generic_ntoh(&src, src_recv, sizeof(int), 1);
 
-      // if (root != source) {
-      //   perror("root differet from the source\n");
-      //   exit(EXIT_FAILURE);
-      // }
+    // if (root != source) {
+    //   perror("root differet from the source\n");
+    //   exit(EXIT_FAILURE);
+    // }
 
-      int dst;
-      void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
-      generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+    int dst;
+    void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+    generic_ntoh(&dst, dst_recv, sizeof(int), 1);
 
-      MPI_Collective collective;
-      void *collective_recv =
-          (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
-      generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+    MPI_Collective collective;
+    void *collective_recv =
+        (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+    generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
 
-      MPI_Datatype __datatype;
-      void *datatype_recv = (char *)message + (sizeof(char) * 4) +
-                            (sizeof(int) * 3) + sizeof(MPI_Collective);
-      generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+    MPI_Datatype __datatype;
+    void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                          (sizeof(int) * 3) + sizeof(MPI_Collective);
+    generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
 
-      int len;
-      void *len_recv = (char *)message + (sizeof(char) * 4) +
-                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                       sizeof(MPI_Datatype);
-      generic_ntoh(&len, len_recv, sizeof(int), 1);
+    int len;
+    void *len_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype);
+    generic_ntoh(&len, len_recv, sizeof(int), 1);
 
-      // Add tag to message header
-      // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
-      // 4)))));
+    // Add tag to message header
+    // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+    // 4)))));
 
-      int tag_;
-      void *tag_recv = (char *)message + (sizeof(char) * 4) +
-                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                       sizeof(MPI_Datatype) + sizeof(int);
-      generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
+    int tag_;
+    void *tag_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     sizeof(int);
+    generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
 
-      unsigned long seq;
-      void *seq_recv = (char *)message + (sizeof(char) * 4) +
-                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                       sizeof(MPI_Datatype) + (sizeof(int) * 2);
-      generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
+    unsigned long seq;
+    void *seq_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     (sizeof(int) * 2);
+    generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
 
-      unsigned long id;
-      void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
-                      sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-                      (sizeof(int) * 2) + sizeof(unsigned long);
-      generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
+    unsigned long id;
+    void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                    sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                    (sizeof(int) * 2) + sizeof(unsigned long);
+    generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
 
-      // Extract data payload
-      void *buf_recv = (char *)message + (sizeof(char) * 4) +
-                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                       sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                       sizeof(unsigned long) + sizeof(unsigned long);
-      int data_size =
-          received -
-          ((sizeof(char) * 4) + (sizeof(int) * 3) + sizeof(MPI_Collective) +
-           sizeof(MPI_Datatype) + (sizeof(int) * 2) + sizeof(unsigned long) +
-           sizeof(unsigned long));
+    // Extract data payload
+    void *buf_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                     sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                     (sizeof(int) * 2) + sizeof(unsigned long) +
+                     sizeof(unsigned long);
+    int data_size = received - ((sizeof(char) * 4) + (sizeof(int) * 3) +
+                                sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                                (sizeof(int) * 2) + sizeof(unsigned long) +
+                                sizeof(unsigned long));
 
-      if (data_size != size) {
-        __mpi_send_ack_nack(root, tag_, seq,
-                            MPI_PROCESS->ids[source][MPI_PROCESS->rank],
-                            MPI_NACK, MPI_SEND);
-        if (id > MPI_PROCESS->ids[source][MPI_PROCESS->rank]) {
-          mpihdr *mpi_hdr = (mpihdr *)malloc(sizeof(mpihdr));
-          mpi_hdr->text = header_mpi;
-          mpi_hdr->root = root;
-          mpi_hdr->src = src;
-          mpi_hdr->dst = dst;
-          mpi_hdr->collective = collective;
-          mpi_hdr->datatype = __datatype;
-          mpi_hdr->len = len;
-          mpi_hdr->tag = tag;
-          mpi_hdr->seq = seq;
-          mpi_hdr->id = id;
-          int size = datatype_size_in_bytes(len, __datatype);
-          void *data = malloc(size);
-          void *buf_recv = (char *)message + (sizeof(char) * 4) +
-                           (sizeof(int) * 3) + sizeof(MPI_Collective) +
-                           sizeof(MPI_Datatype) + (sizeof(int) * 2) +
-                           sizeof(unsigned long) + sizeof(unsigned long);
-          switch (__datatype) {
-          case MPI_CHAR: {
-            generic_ntoh(data, buf_recv, sizeof(char), len);
-            char *buf_char = (char *)data;
-            buf_char[len - 1] = '\0';
-          } break;
-          case MPI_SIGNED_CHAR: {
-            generic_ntoh(data, buf_recv, sizeof(signed char), len);
-            signed char *buf_char = (signed char *)data;
-            buf_char[len - 1] = '\0';
-          } break;
-          case MPI_UNSIGNED_CHAR: {
-            generic_ntoh(data, buf_recv, sizeof(unsigned char), len);
-            unsigned char *buf_char = (unsigned char *)len;
-            buf_char[len - 1] = '\0';
-          } break;
-          case MPI_SHORT: {
-            generic_ntoh(data, buf_recv, sizeof(short), len);
-          } break;
-          case MPI_UNSIGNED_SHORT: {
-            generic_ntoh(data, buf_recv, sizeof(unsigned short), len);
-          } break;
-          case MPI_INT: {
-            generic_ntoh(data, buf_recv, sizeof(int), len);
-          } break;
-          case MPI_UNSIGNED: {
-            generic_ntoh(data, buf_recv, sizeof(unsigned), len);
-          } break;
-          case MPI_LONG: {
-            generic_ntoh(data, buf_recv, sizeof(long), len);
-          } break;
-          case MPI_UNSIGNED_LONG: {
-            generic_ntoh(data, buf_recv, sizeof(unsigned long), len);
-          } break;
-          case MPI_LONG_LONG: {
-            generic_ntoh(data, buf_recv, sizeof(long long), len);
-          } break;
-          case MPI_UNSIGNED_LONG_LONG: {
-            generic_ntoh(data, buf_recv, sizeof(unsigned long long), len);
-          } break;
-          case MPI_FLOAT: {
-            generic_ntoh(data, buf_recv, sizeof(float), len);
-          } break;
-          case MPI_DOUBLE: {
-            generic_ntoh(data, buf_recv, sizeof(double), len);
-          } break;
-          case MPI_LONG_DOUBLE: {
-            generic_ntoh(data, buf_recv, sizeof(long double), len);
-          } break;
-          case MPI_C_BOOL: {
-            generic_ntoh(data, buf_recv, sizeof(bool), len);
-          } break;
-          case MPI_WCHAR: {
-            generic_ntoh(data, buf_recv, sizeof(wchar_t), len);
-            wchar_t *buf_char = (wchar_t *)data;
-            buf_char[len - 1] = L'\0';
-          } break;
-          default:
-            free(message);
-            return -1;
-          }
-          mpi_hdr->data = data;
-          MPI_PROCESS->packet_queqe =
-              push_mpihder(MPI_PROCESS->packet_queqe, mpi_hdr);
-
-          // Convert from network byte order to host byte order
-          switch (datatype) {
-          case MPI_CHAR: {
-            generic_ntoh(buf, buf_recv, sizeof(char), count);
-            char *buf_char = (char *)buf;
-            buf_char[count - 1] = '\0';
-          } break;
-          case MPI_SIGNED_CHAR: {
-            generic_ntoh(buf, buf_recv, sizeof(signed char), count);
-            signed char *buf_char = (signed char *)buf;
-            buf_char[count - 1] = '\0';
-          } break;
-          case MPI_UNSIGNED_CHAR: {
-            generic_ntoh(buf, buf_recv, sizeof(unsigned char), count);
-            unsigned char *buf_char = (unsigned char *)buf;
-            buf_char[count - 1] = '\0';
-          } break;
-          case MPI_SHORT: {
-            generic_ntoh(buf, buf_recv, sizeof(short), count);
-          } break;
-          case MPI_UNSIGNED_SHORT: {
-            generic_ntoh(buf, buf_recv, sizeof(unsigned short), count);
-          } break;
-          case MPI_INT: {
-            generic_ntoh(buf, buf_recv, sizeof(int), count);
-          } break;
-          case MPI_UNSIGNED: {
-            generic_ntoh(buf, buf_recv, sizeof(unsigned), count);
-          } break;
-          case MPI_LONG: {
-            generic_ntoh(buf, buf_recv, sizeof(long), count);
-          } break;
-          case MPI_UNSIGNED_LONG: {
-            generic_ntoh(buf, buf_recv, sizeof(unsigned long), count);
-          } break;
-          case MPI_LONG_LONG: {
-            generic_ntoh(buf, buf_recv, sizeof(long long), count);
-          } break;
-          case MPI_UNSIGNED_LONG_LONG: {
-            generic_ntoh(buf, buf_recv, sizeof(unsigned long long), count);
-          } break;
-          case MPI_FLOAT: {
-            generic_ntoh(buf, buf_recv, sizeof(float), count);
-          } break;
-          case MPI_DOUBLE: {
-            generic_ntoh(buf, buf_recv, sizeof(double), count);
-          } break;
-          case MPI_LONG_DOUBLE: {
-            generic_ntoh(buf, buf_recv, sizeof(long double), count);
-          } break;
-          case MPI_C_BOOL: {
-            generic_ntoh(buf, buf_recv, sizeof(bool), count);
-          } break;
-          case MPI_WCHAR: {
-            generic_ntoh(buf, buf_recv, sizeof(wchar_t), count);
-            wchar_t *buf_char = (wchar_t *)buf;
-            buf_char[count - 1] = L'\0';
-          } break;
-          default:
-            free(message);
-            return -1;
-          }
-        }
-      } else {
-        ack_flag = 1;
-        __mpi_send_ack_nack(root, tag_, seq,
-                            MPI_PROCESS->ids[source][MPI_PROCESS->rank],
-                            MPI_ACK, MPI_SEND);
+    if (data_size != size) {
+      free(message);
+      __mpi_send_tcp_lost_packet(MPI_NACK, MPI_PROCESS->rank, source, tag,
+                                 MPI_SEND);
+      int err = __mpi_recv_tcp(buf, count, datatype, source, tag);
+      if (source >= 0) {
+        MPI_PROCESS->ids[source][MPI_PROCESS->rank] += 1;
       }
-    } while (ack_flag != 1);
+      return err;
+    } // Convert from network byte order to host byte order
+    switch (datatype) {
+    case MPI_CHAR: {
+      generic_ntoh(buf, buf_recv, sizeof(char), count);
+      char *buf_char = (char *)buf;
+      buf_char[count - 1] = '\0';
+    } break;
+    case MPI_SIGNED_CHAR: {
+      generic_ntoh(buf, buf_recv, sizeof(signed char), count);
+      signed char *buf_char = (signed char *)buf;
+      buf_char[count - 1] = '\0';
+    } break;
+    case MPI_UNSIGNED_CHAR: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned char), count);
+      unsigned char *buf_char = (unsigned char *)buf;
+      buf_char[count - 1] = '\0';
+    } break;
+    case MPI_SHORT: {
+      generic_ntoh(buf, buf_recv, sizeof(short), count);
+    } break;
+    case MPI_UNSIGNED_SHORT: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned short), count);
+    } break;
+    case MPI_INT: {
+      generic_ntoh(buf, buf_recv, sizeof(int), count);
+    } break;
+    case MPI_UNSIGNED: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned), count);
+    } break;
+    case MPI_LONG: {
+      generic_ntoh(buf, buf_recv, sizeof(long), count);
+    } break;
+    case MPI_UNSIGNED_LONG: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned long), count);
+    } break;
+    case MPI_LONG_LONG: {
+      generic_ntoh(buf, buf_recv, sizeof(long long), count);
+    } break;
+    case MPI_UNSIGNED_LONG_LONG: {
+      generic_ntoh(buf, buf_recv, sizeof(unsigned long long), count);
+    } break;
+    case MPI_FLOAT: {
+      generic_ntoh(buf, buf_recv, sizeof(float), count);
+    } break;
+    case MPI_DOUBLE: {
+      generic_ntoh(buf, buf_recv, sizeof(double), count);
+    } break;
+    case MPI_LONG_DOUBLE: {
+      generic_ntoh(buf, buf_recv, sizeof(long double), count);
+    } break;
+    case MPI_C_BOOL: {
+      generic_ntoh(buf, buf_recv, sizeof(bool), count);
+    } break;
+    case MPI_WCHAR: {
+      generic_ntoh(buf, buf_recv, sizeof(wchar_t), count);
+      wchar_t *buf_char = (wchar_t *)buf;
+      buf_char[count - 1] = L'\0';
+    } break;
+    default:
+      free(message);
+      return -1;
+    }
 
     free(message);
     if (source >= 0) {
       MPI_PROCESS->ids[source][MPI_PROCESS->rank] += 1;
     }
+    printf("MY RANK: %d, source: %d\n", MPI_PROCESS->rank, root);
+    __mpi_send_tcp_lost_packet(MPI_ACK, MPI_PROCESS->rank, root, tag, MPI_SEND);
   }
+  /* code */
   return count;
 }
 
@@ -1958,45 +2017,45 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
 //   return 0;
 // }
 
-int mpi_barrier(void) {
-  int rank = MPI_PROCESS->rank;
-  int size = WORD_SIZE;
-  int msg = 1;
+// int mpi_barrier(void) {
+//   int rank = MPI_PROCESS->rank;
+//   int size = WORD_SIZE;
+//   int msg = 1;
 
-  int parent = (rank - 1) / 2;
-  int left = 2 * rank + 1;
-  int right = 2 * rank + 2;
+//   int parent = (rank - 1) / 2;
+//   int left = 2 * rank + 1;
+//   int right = 2 * rank + 2;
 
-  // Phase 1: Wait for messages from children
-  if (left < size)
-    mpi_recv(&msg, 1, MPI_INT, left, -1);
-  if (right < size)
-    mpi_recv(&msg, 1, MPI_INT, right, -1);
+//   // Phase 1: Wait for messages from children
+//   if (left < size)
+//     mpi_recv(&msg, 1, MPI_INT, left, -1);
+//   if (right < size)
+//     mpi_recv(&msg, 1, MPI_INT, right, -1);
 
-  // Phase 2: Notify parent
-  if (rank != 0)
-    mpi_send(&msg, 1, MPI_INT, parent, -1);
+//   // Phase 2: Notify parent
+//   if (rank != 0)
+//     mpi_send(&msg, 1, MPI_INT, parent, -1);
 
-  // Phase 3: Wait from parent if not root
-  if (rank != 0)
-    mpi_recv(&msg, 1, MPI_INT, parent, -1);
+//   // Phase 3: Wait from parent if not root
+//   if (rank != 0)
+//     mpi_recv(&msg, 1, MPI_INT, parent, -1);
 
-  // Phase 4: Send to children
-  if (left < size)
-    mpi_send(&msg, 1, MPI_INT, left, -1);
-  if (right < size)
-    mpi_send(&msg, 1, MPI_INT, right, -1);
-  usleep(100000); // 100ms delay
-  // sleep(1); // 100ms delay
+//   // Phase 4: Send to children
+//   if (left < size)
+//     mpi_send(&msg, 1, MPI_INT, left, -1);
+//   if (right < size)
+//     mpi_send(&msg, 1, MPI_INT, right, -1);
+//   usleep(100000); // 100ms delay
+//   // sleep(1); // 100ms delay
 
-  return 0;
-}
+//   return 0;
+// }
 
 int mpi_barrier_ring(void) {
   int rank = MPI_PROCESS->rank;
   int size = WORD_SIZE;
   int dummy = 0;
-  int tag = -1; // Use a unique tag far from your other operations
+  int tag = 9999; // Use a unique tag far from your other operations
 
   // Simple ring-based barrier (compatible with your broadcast)
   int next = (rank + 1) % size;
@@ -2005,13 +2064,14 @@ int mpi_barrier_ring(void) {
   // sleep(1);
   if (rank == 0) {
     // Root: send to next, then receive from prev
-    mpi_send(&dummy, 1, MPI_INT, next, tag);
-    mpi_recv(&dummy, 1, MPI_INT, prev, tag);
+    __mpi_send_tcp(&dummy, 1, MPI_INT, rank, next, tag, MPI_SEND);
+    __mpi_recv_tcp(&dummy, 1, MPI_INT, prev, tag);
   } else {
     // Others: receive from prev, then send to next
-    mpi_recv(&dummy, 1, MPI_INT, prev, tag);
-    mpi_send(&dummy, 1, MPI_INT, next, tag);
+    __mpi_recv_tcp(&dummy, 1, MPI_INT, prev, tag);
+    __mpi_send_tcp(&dummy, 1, MPI_INT, rank, next, tag, MPI_SEND);
   }
+  sleep(1);
 
   return 0;
 }
@@ -2161,6 +2221,85 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
   if (rank == root) {
     // printf("Process %d (root) sending to %d\n", rank, next);
     __mpi_send(buf, count, datatype, root, next, tag, MPI_BCAST_RING);
+    usleep(1000);
+    for (size_t i = 0; i < WORD_SIZE; i++) {
+      if (MPI_PROCESS->rank == i)
+        continue;
+
+      void *message = malloc(MPI_HEADER);
+      if (!message) {
+        perror("malloc failed");
+        return -1;
+      }
+      int root;
+      int src;
+      int dst;
+      MPI_Collective collective;
+      MPI_Datatype __datatype;
+      int len;
+      int tag_;
+      unsigned long seq;
+      unsigned long id;
+      // Receive UDP message using the global socket
+
+      int err = recv(MPI_PROCESS->socket_tcp_fd[i], message, MPI_HEADER, 0);
+      if (err == -1) {
+        printf("failed recv\n");
+        exit(EXIT_SUCCESS);
+      }
+      char header_mpi[4];
+      generic_ntoh(header_mpi, message, sizeof(char), 4);
+
+      void *root_recv = (char *)message + (sizeof(char) * 4);
+      generic_ntoh(&root, root_recv, sizeof(int), 1);
+
+      void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+      generic_ntoh(&src, src_recv, sizeof(int), 1);
+
+      void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+      generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+
+      void *collective_recv =
+          (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+      generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+
+      void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                            (sizeof(int) * 3) + sizeof(MPI_Collective);
+      generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+
+      void *len_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype);
+      generic_ntoh(&len, len_recv, sizeof(int), 1);
+
+      // Add tag to message header
+      // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+      // 4)))));
+
+      void *tag_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + sizeof(int);
+      generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
+
+      void *seq_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2);
+      generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
+
+      void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                      sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                      (sizeof(int) * 2) + sizeof(unsigned long);
+      generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
+      printf("qui, rank: %d, ACK: %d\n", i, __datatype);
+      if (__datatype == MPI_NACK) {
+
+        __mpi_send_tcp(buf, count, datatype, MPI_PROCESS->rank, root, tag,
+                       MPI_SEND);
+
+        free(message);
+        // }
+      }
+    }
   }
 
   // 2) Everyone except root must receive from their predecessor

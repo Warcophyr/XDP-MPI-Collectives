@@ -86,10 +86,9 @@ typedef struct tuple_process {
 
 typedef struct MPI_process_info {
   int rank;
-  int *socket_fd;
+  int *socket_udp_fd;
+  int *socket_tcp_fd;
   unsigned long **ids;
-  list_of_mpihdr *packet_queqe;
-  list_of_mpihdr *ack_queqe;
 } MPI_process_info;
 
 typedef struct socket_id {
