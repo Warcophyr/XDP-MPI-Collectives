@@ -155,13 +155,14 @@ int main(int argc, char *argv[]) {
   int x[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
   // const size_t N = 10000000;
-  // const size_t N = 8241000;
+  const size_t N = 8241000;
   // const size_t N = 5000000;
   // const size_t N = 2000000;
   // const size_t N = 1000000;
   // const size_t N = 50000;
-  const size_t N = 10;
+  // const size_t N = 10;
   // const size_t N = 1425;
+  // const size_t N = 99297;
   char y[N];
   // char *y = malloc(N + 1);
   // if (y == NULL) {
@@ -224,6 +225,7 @@ int main(int argc, char *argv[]) {
       // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
       //  TODO: bug in XDP level to fix tree send
       // mpi_barrier_ring();
+      // mpi_bcast(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
       mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
 
       // Let all packets settle
@@ -246,14 +248,14 @@ int main(int argc, char *argv[]) {
 
       // TODO: add fallback case byte > MTU
 
-      mpi_barrier_ring();
+      // mpi_barrier_ring();
       // if (rank == 2) {
       //   mpi_recv(&x, sizeof(x) / sizeof(int), MPI_INT, 0, 1);
       //   mpi_recv(&x, sizeof(x) / sizeof(int), MPI_INT, 1, 1);
       //   mpi_send(&x, sizeof(x) / sizeof(int), MPI_INT, 0, 1);
       // }
 
-      // mpi_barrier_ring();
+      mpi_barrier_ring();
       // printf("rank %d qui\n", rank);
 
       mpi_reduce_ring(&ttotal, sizeof(ttotal) / sizeof(double), MPI_DOUBLE,
@@ -288,9 +290,9 @@ int main(int argc, char *argv[]) {
       //   // mpi_barrier_ring();
       // }
       // if (MPI_PROCESS->rank == 1) {
-      printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y), y);
-      printf("\n");
-      fflush(stdout);
+      //   printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y), y);
+      //   printf("\n");
+      //   fflush(stdout);
       // }
 
       // if (MPI_PROCESS->rank == 0 || 1 || 2) {

@@ -40,7 +40,7 @@ kfunc: $(TARGETS)
 	gcc -g -O2 -o $@ $@.c -lbpf
 
 run:
-	sudo ./MPI -n 4 -i enp52s0f1np1
+	sudo ./MPI -n 32 -i enp52s0f1np1
 
 clean:
 	rm -f MPI
