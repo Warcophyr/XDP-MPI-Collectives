@@ -33,7 +33,7 @@ int extract_5tuple(int sockfd, struct socket_id *id) {
 int create_udp_socket(int port) {
   int socket_fd;
   struct sockaddr_in addr;
-  // const int SIZE = 1024 * 1024 * 1024;
+  const int SIZE = 1024 * 1024 * 1024;
   ssize_t size = 0;
   socket_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (socket_fd < 0) {
@@ -653,8 +653,8 @@ int __mpi_recv_tcp(void *buf, int count, MPI_Datatype datatype, int source,
                    (sizeof(int) * 2) + sizeof(unsigned long) +
                    sizeof(unsigned long);
   // int data_size =  - ((sizeof(char) * 4) + (sizeof(int) * 3) +
-  //                             sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
-  //                             (sizeof(int) * 2) + sizeof(unsigned long) +
+  //                             sizeof(MPI_Collective) + sizeof(MPI_Datatype)
+  //                             + (sizeof(int) * 2) + sizeof(unsigned long) +
   //                             sizeof(unsigned long));
 
   // Convert from network byte order to host byte order
@@ -1013,20 +1013,21 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
         perror("sendto failed");
         return -1;
       }
-      usleep(1000);
-
+      // printf("sent: %llu\n", sent);
+      // usleep(100);
+      if (seq % 2 == 0) {
+        usleep(200);
+      }
       seq += 1;
       offset += PAYLOAD_SIZE;
       // printf("rank: %d dst: %d seq: %d\n", MPI_PROCESS->rank, dest, seq);
       // usleep(100);
-      // if (i % 2 == 0) {
       free(message);
 
       // usleep(1000);
     }
     MPI_PROCESS->ids[root][dest] += 1;
   } else {
-    MPI_Datatype ack = 0;
     void *message = malloc(total_size);
     if (!message) {
       perror("malloc failed");
@@ -1163,7 +1164,8 @@ int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
   int sent = 0;
 
   // if (MPI_PROCESS->rank != 0) {
-  //   __mpi_send(buf, count, datatype, MPI_PROCESS->rank, dest, tag, MPI_SEND);
+  //   __mpi_send(buf, count, datatype, MPI_PROCESS->rank, dest, tag,
+  //   MPI_SEND);
   // }
   __mpi_send(buf, count, datatype, MPI_PROCESS->rank, dest, tag, MPI_SEND);
 
@@ -1480,6 +1482,8 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
            sizeof(unsigned long));
 
       if (data_size != PAYLOAD_SIZE && data_size != FINAL_SEND) {
+        // printf("RANK: %d seq: %d, recv:%d\n", MPI_PROCESS->rank, seq,
+        //        data_size);
         free(message);
         __mpi_send_tcp_lost_packet(MPI_NACK, MPI_PROCESS->rank, source, tag,
                                    MPI_SEND);
