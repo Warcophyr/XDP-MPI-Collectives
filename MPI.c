@@ -230,13 +230,14 @@ int main(int argc, char *argv[]) {
 
       // Let all packets settle
       // usleep(500000); // 500ms for all processes
-      // if (rank == 0) {
-      //   mpi_send(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
+      // if (MPI_PROCESS->rank == 0) {
+      //   // printf("MY_RANK: %d\n", MPI_PROCESS->rank);
+      //   mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
       //   // __mpi_send_tcp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1, 1,
       //   //                MPI_SEND);
       // }
-      // if (rank == 1) {
-      //   mpi_recv(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
+      // if (MPI_PROCESS->rank == 1) {
+      //   mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
       //   // __mpi_recv_tcp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
       // }
 
