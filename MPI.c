@@ -1,16 +1,12 @@
+#pragma once
 #include "mpi_global_variable.h"
 #include "mpi_struct.h"
 #include "mpi_collective.h"
+#include "Wtime.h"
 #define PORT 5000
 #define BUFFER_SIZE 1024
 #define MAESTRALE_IP "192.168.101.2"
 #define GRECALE_IP "192.168.101.1"
-
-double cp_Wtime() {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return tv.tv_sec + 1.0e-6 * tv.tv_usec;
-}
 
 int main(int argc, char *argv[]) {
   setlocale(LC_ALL, "");
@@ -154,14 +150,17 @@ int main(int argc, char *argv[]) {
 
   int x[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
+  // printf("Time: %lf \n", TTOTAL);
+
   // const size_t N = 10000000;
-  const size_t N = 8241000;
+  // const size_t N = 8241000;
   // const size_t N = 5000000;
   // const size_t N = 2000000;
   // const size_t N = 1000000;
-  // const size_t N = 50000;
+  const size_t N = 50000;
   // const size_t N = 10;
   // const size_t N = 1425;
+  // const size_t N = 2850;
   // const size_t N = 99297;
   char y[N];
   // char *y = malloc(N + 1);
@@ -175,6 +174,8 @@ int main(int argc, char *argv[]) {
   }
   y[N - 1] = '\0';
   // printf("z: %ld\n", strlen(z));
+  fflush(stdout);
+  fflush(stderr);
   for (int rank = 0; rank < WORD_SIZE; rank++) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -183,7 +184,7 @@ int main(int argc, char *argv[]) {
       // if (MPI_PROCESS->rank == 0) {
       //  bpf_map_lookup_elem()
       // }
-      double ttotal = cp_Wtime();
+
       // if (MPI_PROCESS->rank == 0) {
       //   printf("start: %lf\n", ttotal);
       // }
@@ -219,17 +220,18 @@ int main(int argc, char *argv[]) {
         x[7] = 9;
       }
       fflush(stdout);
-      // mpi_bcast_ring(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
-      // mpi_bcast_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 0);
-      // mpi_bcast_ring_xdp(&x, sizeof(x) / sizeof(int), MPI_INT, 1);
-      // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 1);
-      //  TODO: bug in XDP level to fix tree send
-      // mpi_barrier_ring();
-      // mpi_bcast(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-      mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
 
-      // Let all packets settle
-      // usleep(500000); // 500ms for all processes
+      TTOTAL = cp_Wtime();
+      double ttotal = 0.0;
+      ttotal = get_time(TTOTAL);
+      if (rank == 0) {
+        printf("Time INIT: %lf \n", ttotal);
+      }
+      // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+      // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+      mpi_bcast_ring_xdp_eager(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+
+      ttotal = get_time(TTOTAL);
       // if (MPI_PROCESS->rank == 0) {
       //   // printf("MY_RANK: %d\n", MPI_PROCESS->rank);
       //   mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
@@ -241,26 +243,18 @@ int main(int argc, char *argv[]) {
       //   // __mpi_recv_tcp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
       // }
 
-      ttotal = cp_Wtime() - ttotal;
-
-      // Don't use barrier here, or use a much simpler version
-      // usleep(1000);
-      // sleep(1);
-
-      // TODO: add fallback case byte > MTU
-
-      // mpi_barrier_ring();
-      // if (rank == 2) {
-      //   mpi_recv(&x, sizeof(x) / sizeof(int), MPI_INT, 0, 1);
-      //   mpi_recv(&x, sizeof(x) / sizeof(int), MPI_INT, 1, 1);
-      //   mpi_send(&x, sizeof(x) / sizeof(int), MPI_INT, 0, 1);
+      // TTOTAL = get_time(TTOTAL);
+      // if (rank == 0) {
+      //   printf("Time: %lf \n", TTOTAL);
       // }
 
       mpi_barrier_ring();
-      // printf("rank %d qui\n", rank);
 
-      mpi_reduce_ring(&ttotal, sizeof(ttotal) / sizeof(double), MPI_DOUBLE,
+      mpi_reduce_ring(&TTOTAL, sizeof(TTOTAL) / sizeof(double), MPI_DOUBLE,
                       MPI_MAX, 0);
+      if (rank == 0) {
+        printf("Time END: %lf \n", ttotal);
+      }
 
       // if (MPI_PROCESS->rank == 0) {
       //   printf("end: %lf\n", ttotalend);
@@ -282,13 +276,13 @@ int main(int argc, char *argv[]) {
       // }
       // mpi_barrier_ring();
       // for (size_t r = 0; r < WORD_SIZE; r++) {
-      //   // mpi_barrier_ring();
+      //   mpi_barrier_ring();
       //   if (MPI_PROCESS->rank == r) {
       //     printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
       //     printf("\n");
       //     fflush(stdout);
       //   }
-      //   // mpi_barrier_ring();
+      //   mpi_barrier_ring();
       // }
       // if (MPI_PROCESS->rank == 1) {
       //   printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y), y);
@@ -307,29 +301,11 @@ int main(int argc, char *argv[]) {
       // for (int i = 0; i < WORD_SIZE; i++) {
       //   wait(NULL); // wait for each child to finish
       // }
-      if (rank == 0) {
-        printf("Time: %lf \n", ttotal);
-      }
-
-      // printf("Rank: %d: \n", MPI_PROCESS->rank);
-      // for (size_t i = 0; i < sizeof(y) / sizeof(char); i++) {
-      //   printf("%c ", y[i]);
+      // ttotal = cp_Wtime() - TTOTAL;
+      // if (rank == 0) {
+      //   printf("Time: %lf \n", ttotal);
       // }
-      // printf("\n");
 
-      // read_packets_from_map(EBPF_INFO.mpi_sockets_map_fd, &loader);
-      // mpi_barrier();
-      // if (MPI_PROCESS->rank == 1) {
-      //   int msg[] = {1, 2, 3};
-      //   mpi_send(msg, 3, MPI_INT, 2, 1);
-      // }
-      // if (MPI_PROCESS->rank == 2) {
-
-      //   int msg[1024];
-      //   mpi_recv(msg, 3, MPI_INT, 1, 2);
-      //   // printf("%s\n", msg);
-      //   print_mpi_message(msg, 3, MPI_INT);
-      // }
       exit(EXIT_SUCCESS);
     }
   }

@@ -1,6 +1,7 @@
 #pragma once
 #include <stdlib.h>
 #include "mpi_struct.h"
+#include "Wtime.h"
 #include <xdp/xsk.h>
 
 #define MPI_ANY_SOURCE -2
@@ -25,3 +26,4 @@
 
 EBPF_info EBPF_INFO = {0};
 struct ebpf_loader loader = {0};
+double TTOTAL = 0;

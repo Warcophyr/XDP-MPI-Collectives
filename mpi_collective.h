@@ -37,6 +37,7 @@
 #include "hton.h"
 #include "packet.h"
 #include "mpi_collective.c"
+#include "Wtime.h"
 #include <math.h>
 #include <net/ethernet.h>
 #include <netinet/ether.h>
