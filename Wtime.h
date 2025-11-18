@@ -1,6 +1,7 @@
 #pragma once
 #include <time.h>
 #include <sys/time.h>
+#include <stdint.h>
 
 inline double cp_Wtime() {
   struct timeval tv;

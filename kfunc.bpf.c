@@ -354,6 +354,9 @@ int kfunc(struct xdp_md *ctx) {
               return XDP_CLONE_PASS(1);
             }
             int next = (int)(((unsigned)((dst_host) + 1)) % ((unsigned)(size)));
+            if (root_host == next) {
+              return XDP_DROP;
+            }
             tuple_process inter_dest = {0};
             inter_dest.src_procc = dst_host;
             inter_dest.dst_procc = next;
@@ -398,180 +401,7 @@ int kfunc(struct xdp_md *ctx) {
       break;
     }
 
-    // if (ctx->data + sizeof(__u32) <= ctx->data_end) {
-
-    //   // return XDP_CLONE_TX;
-    //   if (ctx->data_meta + sizeof(__u32) <= ctx->data) {
-    //     int num_copy = 0;
-    //     __builtin_memcpy(&num_copy, data_meta, sizeof(num_copy));
-    //     bpf_printk("num_copy: %d", num_copy);
-    //     if (num_copy == 0) {
-
-    //       int copy = 2;
-    //       int xdp_clone_tx = 6;
-    //       int exit_code = 0;
-    //       exit_code = (copy << 5) | xdp_clone_tx;
-    //       return exit_code;
-    //     } else if (num_copy > 0) {
-    //       // bpf_printk("XDP_TX_CLONE");
-    //       // bpf_printk("copy packet");
-    //       // bpf_printk("ETH: src=%02x:%02x:%02x:%02x:%02x:%02x "
-    //       //            "dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
-    //       //            eth->h_source[0], eth->h_source[1], eth->h_source[2],
-    //       //            eth->h_source[3], eth->h_source[4], eth->h_source[5],
-    //       //            eth->h_dest[0], eth->h_dest[1], eth->h_dest[2],
-    //       //            eth->h_dest[3], eth->h_dest[4], eth->h_dest[5]);
-
-    //       __u8 src_mac[ETH_ALEN];
-    //       __u8 dst_mac[ETH_ALEN];
-    //       __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
-    //       __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
-    //       __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
-    //       __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
-    //       // bpf_printk("ETH: src=%02x:%02x:%02x:%02x:%02x:%02x "
-    //       //            "dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
-    //       //            eth->h_source[0], eth->h_source[1], eth->h_source[2],
-    //       //            eth->h_source[3], eth->h_source[4], eth->h_source[5],
-    //       //            eth->h_dest[0], eth->h_dest[1], eth->h_dest[2],
-    //       //            eth->h_dest[3], eth->h_dest[4], eth->h_dest[5]);
-
-    //       __u32 saddr = iph->saddr;
-    //       __u32 daddr = iph->daddr;
-    //       __sum16 check = iph->check;
-    //       __be16 id = iph->id;
-    //       __be16 frag_off = iph->frag_off;
-    //       __sum16 check_udp = udph->check;
-
-    //       // bpf_printk("Received Source IP: 0x%x", bpf_ntohl(iph->saddr));
-    //       // bpf_printk("Received Destination IP: 0x%x",
-    //       // bpf_ntohl(iph->daddr));
-    //       // bpf_printk("IP checksum: 0x%04x\n", __builtin_bswap16(check));
-    //       // bpf_printk("IP ID: %u, Fragment offset + flags: 0x%x\n", id,
-    //       // frag_off);
-
-    //       __u32 new_daddr = bpf_ntohl(saddr);
-    //       __u32 new_saddr = bpf_ntohl(daddr);
-    //       iph->saddr = bpf_htonl(new_saddr);
-    //       iph->daddr = bpf_htonl(new_daddr);
-    //       // bpf_printk("Received Source IP: 0x%x", bpf_ntohl(iph->saddr));
-    //       // bpf_printk("Received Destination IP: 0x%x",
-    //       // bpf_ntohl(iph->daddr);
-
-    //       // bpf_printk("UDP: sport=%d dport=%d len=%d\n",
-    //       // bpf_ntohs(udph->source),
-    //       //            bpf_ntohs(udph->dest), bpf_ntohs(udph->len));
-    //       udph->dest = bpf_htons(5000);
-    //       // udph->dest = 12346;
-    //       // udph->check = 0;
-
-    //       // iph->check = ip_checksum_xdp(iph);
-    //       // bpf_printk("UDP: sport=%d dport=%d len=%d\n",
-    //       // bpf_ntohs(udph->source),
-    //       //            bpf_ntohs(udph->dest), bpf_ntohs(udph->len));
-
-    //       udph->check = 0;
-    //       iph->check = ip_checksum_xdp(iph);
-    //       void *l4_hdr = (void *)iph + ip_hdr_len;
-    //       if (l4_hdr + sizeof(struct udphdr) > data_end)
-    //         return XDP_PASS;
-    //       void *payload = l4_hdr + sizeof(udph);
-    //       if (payload + sizeof(__u32) <= data_end) {
-    //         __u32 netval = *(__u32 *)payload;
-    //         __u32 val = bpf_ntohl(netval);
-    //         bpf_printk("val %x", val);
-    //         // Modify value: make it positive (for example, flip sign or set
-    //         // abs())
-    //         __u32 new_val = 3; // absolute value
-    //         *(__u32 *)payload = bpf_htonl(new_val);
-
-    //         udph->check = 0;
-    //         iph->check = ip_checksum_xdp(iph);
-    //         return XDP_TX;
-    //       }
-    //     }
-    //     // return XDP_PASS;
-    //   }
-
-    //   // bpf_printk("ETH: src=%02x:%02x:%02x:%02x:%02x:%02x "
-    //   //            "dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
-    //   //            eth->h_source[0], eth->h_source[1], eth->h_source[2],
-    //   //            eth->h_source[3], eth->h_source[4], eth->h_source[5],
-    //   //            eth->h_dest[0], eth->h_dest[1], eth->h_dest[2],
-    //   //            eth->h_dest[3], eth->h_dest[4], eth->h_dest[5]);
-
-    //   // __u8 src_mac[ETH_ALEN];
-    //   // __u8 dst_mac[ETH_ALEN];
-    //   // __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
-    //   // __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
-    //   // __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
-    //   // __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
-    //   // bpf_printk("ETH: src=%02x:%02x:%02x:%02x:%02x:%02x "
-    //   //            "dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
-    //   //            eth->h_source[0], eth->h_source[1], eth->h_source[2],
-    //   //            eth->h_source[3], eth->h_source[4], eth->h_source[5],
-    //   //            eth->h_dest[0], eth->h_dest[1], eth->h_dest[2],
-    //   //            eth->h_dest[3], eth->h_dest[4], eth->h_dest[5]);
-
-    //   // __u32 saddr = iph->saddr;
-    //   // __u32 daddr = iph->daddr;
-    //   // __sum16 check = iph->check;
-    //   // __be16 id = iph->id;
-    //   // __be16 frag_off = iph->frag_off;
-    //   // __sum16 check_udp = udph->check;
-
-    //   // bpf_printk("Received Source IP: 0x%x", bpf_ntohl(iph->saddr));
-    //   // bpf_printk("Received Destination IP: 0x%x", bpf_ntohl(iph->daddr));
-    //   // // bpf_printk("IP checksum: 0x%04x\n", __builtin_bswap16(check));
-    //   // // bpf_printk("IP ID: %u, Fragment offset + flags: 0x%x\n", id,
-    //   // // frag_off);
-
-    //   // __u32 new_daddr = bpf_ntohl(saddr);
-    //   // __u32 new_saddr = bpf_ntohl(daddr);
-    //   // iph->saddr = bpf_htonl(new_saddr);
-    //   // iph->daddr = bpf_htonl(new_daddr);
-    //   // bpf_printk("Received Source IP: 0x%x", bpf_ntohl(iph->saddr));
-    //   // bpf_printk("Received Destination IP: 0x%x", bpf_ntohl(iph->daddr));
-
-    //   // bpf_printk("UDP: sport=%d dport=%d len=%d\n",
-    //   // bpf_ntohs(udph->source),
-    //   //            bpf_ntohs(udph->dest), bpf_ntohs(udph->len));
-    //   // // udph->dest = bpf_htons(12346);
-    //   // // udph->dest = 12346;
-    //   // // udph->check = 0;
-
-    //   // iph->check = ip_checksum_xdp(iph);
-    //   // bpf_printk("UDP: sport=%d dport=%d len=%d\n",
-    //   // bpf_ntohs(udph->source),
-    //   //            bpf_ntohs(udph->dest), bpf_ntohs(udph->len));
-
-    //   // void *l4_hdr = (void *)iph + ip_hdr_len;
-    //   // if (l4_hdr + sizeof(struct udphdr) > data_end)
-    //   //   return XDP_PASS;
-    //   // void *payload = l4_hdr + sizeof(udph);
-    //   // if (payload + sizeof(__u32) <= data_end) {
-    //   //   __u32 netval = *(__u32 *)payload;
-    //   //   __u32 val = bpf_ntohl(netval);
-    //   //   bpf_printk("val %x", val);
-    //   //   // Modify value: make it positive (for example, flip sign or set
-    //   //   // abs())
-    //   //   __u32 new_val = 2; // absolute value
-    //   //   *(__u32 *)payload = bpf_htonl(new_val);
-
-    //   //   bpf_printk("new_val %x", new_val);
-    //   //   // Write back in network order
-    //   //   udph->check = 0;
-    //   //   iph->check = ip_checksum_xdp(iph);
-    //   // }
-    //   // return XDP_TX;
-    //   // return XDP_CLONE;
-    //   return XDP_PASS;
-    // }
-    // short x = 2;
-    // short y = 3;
-    // int z = 0;
-    // z = ((int)x << 16);
-    // return z;
-    return XDP_PASS;
+        return XDP_PASS;
   }
   if (iph->saddr == bpf_htonl(3232261378)) { // src ip 192.168.101.1
     // bpf_printk("Grecale say i");
@@ -767,6 +597,9 @@ int kfunc(struct xdp_md *ctx) {
               return XDP_CLONE_PASS(1);
             }
             int next = (int)(((unsigned)((dst_host) + 1)) % ((unsigned)(size)));
+            if (root_host == next) {
+              return XDP_DROP;
+            }
             tuple_process inter_dest = {0};
             inter_dest.src_procc = dst_host;
             inter_dest.dst_procc = next;

@@ -20,6 +20,7 @@
 #include <net/if.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <sys/socket.h>
 // #include <ioctls.h>
 
 // Raw socket includes - add these before other networking includes
@@ -43,6 +44,8 @@
 #include <netinet/ether.h>
 #include <xdp/libxdp.h>
 #include <bpf/libbpf_legacy.h>
+
+#include <netinet/tcp.h>
 
 int extract_5tuple(int sockfd, struct socket_id *id);
 int create_udp_socket(int port);

@@ -1,8 +1,10 @@
 #pragma once
+#define _GNU_SOURCE
 #include "mpi_global_variable.h"
 #include "mpi_struct.h"
 #include "mpi_collective.h"
 #include "Wtime.h"
+#include <sched.h>
 #define PORT 5000
 #define BUFFER_SIZE 1024
 #define MAESTRALE_IP "192.168.101.2"
@@ -148,165 +150,249 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
 
-  int x[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
-
   // printf("Time: %lf \n", TTOTAL);
 
   // const size_t N = 10000000;
   // const size_t N = 8241000;
-  // const size_t N = 5000000;
-  // const size_t N = 2000000;
-  // const size_t N = 1000000;
-  const size_t N = 50000;
-  // const size_t N = 10;
-  // const size_t N = 1425;
-  // const size_t N = 2850;
-  // const size_t N = 99297;
-  char y[N];
-  // char *y = malloc(N + 1);
-  // if (y == NULL) {
-  //   // perror("malloc fail\n");
-  //   printf("malloc fail\n");
-  //   exit(EXIT_FAILURE);
-  // }
-  for (int i = 0; i < N; i++) {
-    y[i] = 'a'; // set each element to 'a'
-  }
-  y[N - 1] = '\0';
-  // printf("z: %ld\n", strlen(z));
-  fflush(stdout);
-  fflush(stderr);
-  for (int rank = 0; rank < WORD_SIZE; rank++) {
-    pid_t pid = fork();
-    if (pid == 0) {
-      MPI_PROCESS =
-          mpi_init(rank, EBPF_INFO.address_to_proc, EBPF_INFO.proc_to_address);
-      // if (MPI_PROCESS->rank == 0) {
-      //  bpf_map_lookup_elem()
-      // }
+  // const size_t N = 4194304;
+  // const size_t N = 7000000;
+  const size_t N = 1048577;
+  {
 
-      // if (MPI_PROCESS->rank == 0) {
-      //   printf("start: %lf\n", ttotal);
-      // }
-      if (MPI_PROCESS->rank == 0) {
+    // const size_t n = 8241000;
+    // const size_t N = 5000000;
+    // const size_t n = 2000000;
+    // const size_t n = 1000000;
+    // const size_t N = 50000;
+    // const size_t n = 50000;
+    // const size_t N = 60000;
+    // const size_t N = 70000;
+    // const size_t N = 80000;
+    // const size_t N = 90000;
+    // const size_t n = 524288;
+    // const size_t n = 4;
+    // const size_t n = 1048576;
+    // const size_t N = 1425;
+    // const size_t n = 65536;
+    // const size_t n = 1048577;
+    // const size_t N = 2850;
+    // const size_t N = 99297;
+    /* code */
 
-        // x[0] = 2;
-        // x[1] = 3;
-        // x[2] = 4;
-        // x[3] = 5;
-        // x[4] = 6;
-        // x[5] = 7;
-        // x[6] = 8;
-        // x[7] = 9;
-        // mpi_send(x, sizeof(x) / sizeof(int), MPI_INT, 0, 2);
-        // y[0] = 'm';
-        // y[1] = 'e';
-        // y[2] = 'c';
-        // y[3] = 'c';
-        for (size_t i = 0; i < N - 1; i++) {
-          y[i] = 'A';
+    // char *y = malloc(N + 1);
+    // if (y == NULL) {
+    //   // perror("malloc fail\n");
+    //   printf("malloc fail\n");
+    //   exit(EXIT_FAILURE);
+    // }
+    // char y[N];
+    // for (int i = 0; i < N; i++) {
+    //   y[i] = 'a'; // set each element to 'a'
+    // }
+    // y[N - 1] = '\0';
+    // printf("z: %ld\n", strlen(z));
+    fflush(stdout);
+    fflush(stderr);
+    for (int rank = 0; rank < WORD_SIZE; rank++) {
+      pid_t pid = fork();
+      if (pid == 0) {
+        MPI_PROCESS = mpi_init(rank, EBPF_INFO.address_to_proc,
+                               EBPF_INFO.proc_to_address);
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        CPU_SET(rank, &set); // pin to CPU core 2 (0-based index)
+
+        // Apply affinity to the current process (pid = 0)
+        if (sched_setaffinity(0, sizeof(set), &set) == -1) {
+          perror("sched_setaffinity");
+          return 1;
         }
-        y[N - 2] = 'E';
+        cpu_set_t get_set;
+        CPU_ZERO(&get_set);
+        if (sched_getaffinity(0, sizeof(get_set), &get_set) == -1) {
+          perror("sched_getaffinity");
+        } else {
+          printf("Child rank %d allowed CPUs:\n", rank);
+          for (int i = 0; i < CPU_SETSIZE; i++) {
+            if (CPU_ISSET(i, &get_set)) {
+              printf("  CPU %d\n", i);
+            }
+          }
+        }
+
+        // if (MPI_PROCESS->rank == 0) {
+        //   // printf("MY_RANK: %d\n", MPI_PROCESS->rank);
+        //   mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
+        //   // __mpi_send_tcp_optimized(y, sizeof(y) / sizeof(char),
+        //   // MPI_CHAR,
+        //   //     // 1, 1);
+        //   //     // __mpi_send_udp_optimized(y, sizeof(y) / sizeof(char),
+        //   //     MPI_CHAR, 1,
+        //   // 1,
+        //   //                          MPI_SEND);
+        //   // __mpi_send_tcp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1,
+        //   // 1,
+        //   //                MPI_SEND);
+        // }
+        // if (MPI_PROCESS->rank == 1) {
+        //   mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
+        //   // __mpi_recv_tcp_optimized(y, sizeof(y) / sizeof(char),
+        //   // MPI_CHAR,
+        //   //     // 0, 1);
+        //   //     // __mpi_recv_udp_optimized(y, sizeof(y) / sizeof(char),
+        //   //     MPI_CHAR, 0,
+        //   // 1);
+        //   // __mpi_recv_tcp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0,
+        //   // 1);
+        // }
+        double diff = 0.0;
+        double __diff = 0.0;
+        double cpu_time_used = 0.0;
+        for (size_t n = 2; n < N; n *= 2) {
+          // for (size_t warmup = 0; warmup < 5; warmup++) {
+          // char y[n];
+          // for (int i = 0; i < n; i++) {
+          //   y[i] = 'a';
+          // }
+          // if (MPI_PROCESS->rank == 0) {
+          //   y[n - 2] = 'E';
+          // }
+
+          //   mpi_barrier_ring();
+          //   mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+          //   mpi_barrier_ring();
+          // }
+
+          double __cpu_time_used = 0.0;
+          for (size_t _ = 0; _ < 10; _++) {
+            /* code */
+
+            if (n < 2) {
+              exit(EXIT_FAILURE);
+            }
+
+            char y[n];
+            for (int i = 0; i < n; i++) {
+              y[i] = 'a'; // set each element to 'a'
+            }
+            y[n - 1] = '\0';
+
+            if (MPI_PROCESS->rank == 0) {
+              for (size_t i = 0; i < n - 1; i++) {
+                y[i] = 'A';
+              }
+              y[n - 2] = 'E';
+            }
+            fflush(stdout);
+
+            // TTOTAL = cp_Wtime();
+            // double start = 0.0;
+            clock_t start, end;
+            // double cpu_time_used;
+            // ttotal =  get_time(TTOTAL);
+            mpi_barrier_ring();
+            // usleep(10000); // 10ms settle
+            start = clock();
+
+            mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+
+            end = clock();
+
+            mpi_barrier_ring();
+            // diff = end - start;
+            __cpu_time_used += (((double)(end - start)) / CLOCKS_PER_SEC);
+            // if (rank == 0) {
+            //   // printf("Time: %lf, size: %d\n", diff, n);
+            //   printf("Time: %lf, size: %d\n", cpu_time_used, n);
+            // }
+
+            // mpi_reduce_linear_sum(&cpu_time_used, &__cpu_time_used, 1, 0);
+            // mpi_reduce_linear_max(&cpu_time_used, &__cpu_time_used, 1, 0);
+            // if (rank == 0) {
+            //   printf("Time: %lf, size: %d\n", __cpu_time_used, n);
+            // }
+            // mpi_reduce_ring(&__cpu_time_used, 1, MPI_DOUBLE, MPI_MAX, 0);
+            // printf("rank: %d Time END: %lf buf: %ld\n", rank, diff, n);
+
+            // mpi_reduce_ring(&diff, 1, MPI_DOUBLE, MPI_MAX, 0);
+            // mpi_reduce_linear_max(&diff, &__diff, 1, 0);
+            // if (rank == 0) {
+            //   printf("RANK: %d, Time: %lf, size: %d\n", rank, __diff, n);
+            // }
+            // mpi_reduce_ring(&diff, 1, MPI_DOUBLE, MPI_SUM, 0);
+            // double avg_time = diff / WORD_SIZE;
+            // if (rank == 0) {
+            //   printf("Time: %lf, size: %d\n", avg_time, n);
+            // }
+            // mpi_barrier_ring();
+            // for (size_t r = 0; r < WORD_SIZE; r++) {
+            //   mpi_barrier_ring();
+            //   if (MPI_PROCESS->rank == r) {
+            //     printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
+            //     printf("\n");
+            //     fflush(stdout);
+            //   }
+            //   mpi_barrier_ring();
+            // }
+
+            // if (rank == 0) {
+            //   printf("Time: %lf, size: %d\n", diff, n);
+            // }
+            // sleep(1);
+          }
+          // if (rank == 0) {
+          //   printf("Time: %lf, size: %d\n", __cpu_time_used / 10, n);
+          // }
+
+          mpi_reduce_linear_max(&__cpu_time_used, &cpu_time_used, 1, 0);
+
+          if (rank == 0) {
+            printf("Time: %lf, size: %d\n", cpu_time_used / 10, n);
+          }
+        }
+        // }
+
+        // if (MPI_PROCESS->rank == 0) {
+        //   printf("end: %lf\n", ttotalend);
+        // }
+        // for (int i = 0; i < WORD_SIZE; i++) {
+        //   wait(NULL); // wait for each child to finish
+        // }
+        // for (size_t r = 0; r < WORD_SIZE; r++) {
+        //   // mpi_barrier_ring();
+        //   if (MPI_PROCESS->rank == r) {
+        //     printf("Rank: %d: \n", MPI_PROCESS->rank);
+        //     for (size_t i = 0; i < (sizeof(x) / sizeof(int)) - 1; i++) {
+        //       printf("%d ", x[i]);
+        //     }
+        //     printf("\n");
+        //     fflush(stdout);
+        //   }
+        //   // mpi_barrier_ring();
+        // }
+        // if (MPI_PROCESS->rank == 1) {
+        //   printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y),
+        //   y); printf("\n"); fflush(stdout);
+        // }
+
+        // if (MPI_PROCESS->rank == 0 || 1 || 2) {
+        //   printf("Rank: %d: \n", MPI_PROCESS->rank);
+        //   for (size_t i = 0; i < (sizeof(x) / sizeof(int)) - 1; i++) {
+        //     printf("%d ", x[i]);
+        //   }
+        //   printf("\n");
+        //   fflush(stdout);
+        // }
+        // for (int i = 0; i < WORD_SIZE; i++) {
+        //   wait(NULL); // wait for each child to finish
+        // }
+        // ttotal = cp_Wtime() - TTOTAL;
+        // if (rank == 0) {
+        //   printf("Time: %lf \n", ttotal);
+        // }
+
+        exit(EXIT_SUCCESS);
       }
-      if (MPI_PROCESS->rank == 0) {
-
-        x[0] = 2;
-        x[1] = 3;
-        x[2] = 4;
-        x[3] = 5;
-        x[4] = 6;
-        x[5] = 7;
-        x[6] = 8;
-        x[7] = 9;
-      }
-      fflush(stdout);
-
-      TTOTAL = cp_Wtime();
-      double ttotal = 0.0;
-      ttotal = get_time(TTOTAL);
-      if (rank == 0) {
-        printf("Time INIT: %lf \n", ttotal);
-      }
-      // mpi_bcast_ring(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-      // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-      mpi_bcast_ring_xdp_eager(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-
-      ttotal = get_time(TTOTAL);
-      // if (MPI_PROCESS->rank == 0) {
-      //   // printf("MY_RANK: %d\n", MPI_PROCESS->rank);
-      //   mpi_send(y, sizeof(y) / sizeof(char), MPI_CHAR, 1, 1);
-      //   // __mpi_send_tcp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1, 1,
-      //   //                MPI_SEND);
-      // }
-      // if (MPI_PROCESS->rank == 1) {
-      //   mpi_recv(y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
-      //   // __mpi_recv_tcp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0, 1);
-      // }
-
-      // TTOTAL = get_time(TTOTAL);
-      // if (rank == 0) {
-      //   printf("Time: %lf \n", TTOTAL);
-      // }
-
-      mpi_barrier_ring();
-
-      mpi_reduce_ring(&TTOTAL, sizeof(TTOTAL) / sizeof(double), MPI_DOUBLE,
-                      MPI_MAX, 0);
-      if (rank == 0) {
-        printf("Time END: %lf \n", ttotal);
-      }
-
-      // if (MPI_PROCESS->rank == 0) {
-      //   printf("end: %lf\n", ttotalend);
-      // }
-      // for (int i = 0; i < WORD_SIZE; i++) {
-      //   wait(NULL); // wait for each child to finish
-      // }
-      // for (size_t r = 0; r < WORD_SIZE; r++) {
-      //   // mpi_barrier_ring();
-      //   if (MPI_PROCESS->rank == r) {
-      //     printf("Rank: %d: \n", MPI_PROCESS->rank);
-      //     for (size_t i = 0; i < (sizeof(x) / sizeof(int)) - 1; i++) {
-      //       printf("%d ", x[i]);
-      //     }
-      //     printf("\n");
-      //     fflush(stdout);
-      //   }
-      //   // mpi_barrier_ring();
-      // }
-      // mpi_barrier_ring();
-      // for (size_t r = 0; r < WORD_SIZE; r++) {
-      //   mpi_barrier_ring();
-      //   if (MPI_PROCESS->rank == r) {
-      //     printf("Rank: %d: \n%s\n", MPI_PROCESS->rank, y);
-      //     printf("\n");
-      //     fflush(stdout);
-      //   }
-      //   mpi_barrier_ring();
-      // }
-      // if (MPI_PROCESS->rank == 1) {
-      //   printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y), y);
-      //   printf("\n");
-      //   fflush(stdout);
-      // }
-
-      // if (MPI_PROCESS->rank == 0 || 1 || 2) {
-      //   printf("Rank: %d: \n", MPI_PROCESS->rank);
-      //   for (size_t i = 0; i < (sizeof(x) / sizeof(int)) - 1; i++) {
-      //     printf("%d ", x[i]);
-      //   }
-      //   printf("\n");
-      //   fflush(stdout);
-      // }
-      // for (int i = 0; i < WORD_SIZE; i++) {
-      //   wait(NULL); // wait for each child to finish
-      // }
-      // ttotal = cp_Wtime() - TTOTAL;
-      // if (rank == 0) {
-      //   printf("Time: %lf \n", ttotal);
-      // }
-
-      exit(EXIT_SUCCESS);
     }
   }
 

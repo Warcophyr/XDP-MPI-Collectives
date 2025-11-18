@@ -89,6 +89,16 @@ typedef struct MPI_process_info {
   int *socket_udp_fd;
   int *socket_tcp_fd;
   unsigned long **ids;
+  void *send_buff;
+  void *recv_buff;
+  void *ACK_buff;
+
+  // ADD THESE FIELDS:
+  int my_udp_socket;                  // This process's UDP socket
+  int my_ack_socket;                  // This process's ACK UDP socket
+  struct sockaddr_in *peer_addrs;     // Peer address table (per process)
+  struct sockaddr_in *peer_addrs_ack; // Peer ACK address table (per process)
+
 } MPI_process_info;
 
 typedef struct socket_id {
