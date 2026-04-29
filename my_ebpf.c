@@ -69,41 +69,20 @@ int ebpf_loader_attach_by_name(struct ebpf_loader *loader,
     return -1;
   }
 
-  // For XDP programs, attach to interface
-  if (bpf_program__type(loader->prog) == BPF_PROG_TYPE_XDP) {
-    if (!interface_name) {
-      fprintf(stderr, "Interface name required for XDP programs\n");
-      return -1;
-    }
-
-    int ifindex = if_nametoindex(interface_name);
-    if (ifindex == 0) {
-      fprintf(stderr, "Invalid interface name: %s\n", interface_name);
-      return -1;
-    }
-
-    loader->link = bpf_program__attach_xdp(loader->prog, ifindex);
-    if (libbpf_get_error(loader->link)) {
-      fprintf(stderr, "Failed to attach XDP program to %s: %s\n",
-              interface_name, strerror(errno));
-      return -1;
-    }
-
-    printf("Successfully attached XDP program to interface %s\n",
-           interface_name);
-  } else {
-    // For other program types, use generic attach
-    loader->link = bpf_program__attach(loader->prog);
-    if (libbpf_get_error(loader->link)) {
-      fprintf(stderr, "Failed to attach BPF program: %s\n", strerror(errno));
-      return -1;
-    }
-
-    printf("Successfully attached BPF program\n");
+  if (!interface_name) {
+    fprintf(stderr, "Interface name required for attachment\n");
+    return -1;
   }
 
-  return 0;
+  int ifindex = if_nametoindex(interface_name);
+  if (ifindex <= 0) {
+    fprintf(stderr, "Invalid interface name: %s\n", interface_name);
+    return -1;
+  }
+
+  return ebpf_loader_attach_by_index(loader, ifindex);
 }
+
 int ebpf_loader_attach_by_index(struct ebpf_loader *loader,
                                 int interface_index) {
   if (!loader->prog) {
@@ -111,8 +90,17 @@ int ebpf_loader_attach_by_index(struct ebpf_loader *loader,
     return -1;
   }
 
-  // For XDP programs, attach to interface
-  if (bpf_program__type(loader->prog) == BPF_PROG_TYPE_XDP) {
+  switch (bpf_program__type(loader->prog)) {
+  case BPF_PROG_TYPE_XDP:
+    if (!interface_index) {
+      fprintf(stderr, "Interface index required for XDP programs\n");
+      return -1;
+    }
+
+    if (interface_index <= 0) {
+      fprintf(stderr, "Invalid interface id: %d\n", interface_index);
+      return -1;
+    }
 
     loader->link = bpf_program__attach_xdp(loader->prog, interface_index);
     if (libbpf_get_error(loader->link)) {
@@ -123,7 +111,25 @@ int ebpf_loader_attach_by_index(struct ebpf_loader *loader,
 
     printf("Successfully attached XDP program to interface %d\n",
            interface_index);
-  } else {
+    break;
+  case BPF_PROG_TYPE_SCHED_CLS:
+    if (interface_index <= 0) {
+      fprintf(stderr, "Interface name required for TC programs\n");
+      return -1;
+    }
+
+    // TODO: for now NULL bpf_tcx_opts it's fine
+    loader->link = bpf_program__attach_tcx(loader->prog, interface_index, NULL);
+    if (libbpf_get_error(loader->link)) {
+      fprintf(stderr, "Failed to attach TC program to %d: %s\n",
+              interface_index, strerror(errno));
+      return -1;
+    }
+
+    printf("Successfully attached TC program to interface %d\n",
+           interface_index);
+    break;
+  default:
     // For other program types, use generic attach
     loader->link = bpf_program__attach(loader->prog);
     if (libbpf_get_error(loader->link)) {
