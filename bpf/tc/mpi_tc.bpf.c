@@ -12,17 +12,15 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
-
 // #ifdef DEBUG
-// #define //bpf_printk(fmt, ...)                                                   \
-//   ({                                                                           \
-//     char ____fmt[] = fmt;                                                        \
+// #define //bpf_printk(fmt, ...) \
+//   ({ \
+//     char ____fmt[] = fmt; \
 //     bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__); \
 //   })
 // #else
-// #define //bpf_printk(fmt, ...)                                                   \
-//   do {                                                                        \
-//   } while (0)
+// #define //bpf_printk(fmt, ...) \
+//   do { \ } while (0)
 // #endif
 
 #define MAGICK_MARK 0xbabe
@@ -57,6 +55,7 @@ typedef enum MPI_Datatype {
 typedef enum MPI_Collective {
   MPI_SEND,
   MPI_BCAST,
+  MPI_BCAST_LINEAR,
   MPI_BCAST_RING,
   MPI_REDUCE,
   MPI_SHATTER,
@@ -118,7 +117,9 @@ static __always_inline __u16 ip_checksum_xdp(struct iphdr *ip) {
   return bpf_htons(~sum);
 }
 // int __src_host = 0;
-__u32 count = 0;
+__u32 count_pass = 0;
+__u32 count_tx = 0;
+__u64 start_time = 0;
 
 static __always_inline int parse_ip_packet(struct __sk_buff *skb,
                                            struct iphdr **out_iph) {
@@ -127,7 +128,7 @@ static __always_inline int parse_ip_packet(struct __sk_buff *skb,
 
   struct ethhdr *eth = data;
   if ((void *)(eth + 1) > data_end) {
-    //bpf_printk("TC: Ethernet header validation failed\n");
+    // bpf_printk("TC: Ethernet header validation failed\n");
     return TC_ACT_OK;
   }
 
@@ -139,14 +140,14 @@ static __always_inline int parse_ip_packet(struct __sk_buff *skb,
 
   struct iphdr *iph = (void *)(eth + 1);
   if ((void *)(iph + 1) > data_end) {
-    //bpf_printk("TC: IP header validation failed\n");
+    // bpf_printk("TC: IP header validation failed\n");
     return TC_ACT_OK;
   }
 
   // eBPF Verifier requirement: ensure the IP header length is at least
   // 5 words (20 bytes) to prevent invalid offsets.
   if (iph->ihl < 5) {
-    //bpf_printk("TC: Invalid IP header length\n");
+    // bpf_printk("TC: Invalid IP header length\n");
     return TC_ACT_OK;
   }
 
@@ -168,12 +169,12 @@ static __always_inline int handle_clone(struct __sk_buff *skb,
                                         struct iphdr *iph) {
 
   if (!iph) {
-    //bpf_printk("TC: IP header is NULL in handle_clone\n");
+    // bpf_printk("TC: IP header is NULL in handle_clone\n");
     return TC_ACT_OK;
   }
   struct udphdr *udph = (void *)iph + iph->ihl * 4;
   if ((void *)udph + 1 > (void *)(long)skb->data_end) {
-    //bpf_printk("TC: UDP header validation failed\n");
+    // bpf_printk("TC: UDP header validation failed\n");
     return TC_ACT_OK;
   }
 
@@ -186,7 +187,7 @@ static __always_inline int handle_clone(struct __sk_buff *skb,
                      sizeof(unsigned long);
 
   if ((void *)payload + needed > (void *)(long)skb->data_end) {
-    //bpf_printk("TC: Not enough payload\n");
+    // bpf_printk("TC: Not enough payload\n");
     return TC_ACT_OK; /* not enough payload */
   }
 
@@ -258,6 +259,11 @@ static __always_inline int handle_clone(struct __sk_buff *skb,
   __builtin_memcpy(&clock, clock_payload, sizeof(unsigned long));
   unsigned long clock_host = bpf_ntohl(clock);
 
+  int key_num_process = 0;
+  int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
+  if (!size_ptr) {
+    return TC_ACT_OK;
+  }
   // //bpf_printk(
   //     "CASE 2 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
   //     "%d, tag: %d seq: %lu clock: %lu",
@@ -410,7 +416,69 @@ static __always_inline int handle_clone(struct __sk_buff *skb,
 
       // //bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
       // //bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
+      count_tx++;
       return bpf_redirect(skb->ingress_ifindex, 0);
+    }
+  } break;
+  case MPI_BCAST_LINEAR: {
+    for (unsigned i = 1; i < (unsigned)(*size_ptr); i++) {
+      /* code */
+
+      if (root_host == dst_host) {
+        return TC_ACT_SHOT;
+      }
+
+      //   __builtin_memcpy(&iter_copy, data_meta, sizeof(iter_copy));
+      // //bpf_printk("num_copy: %d", num_copy);
+
+      int next = (int)(((unsigned)((dst_host) + i)) % ((unsigned)(*size_ptr)));
+      if (root_host == next) {
+        return TC_ACT_OK;
+      }
+
+      tuple_process inter_dest = {0};
+      inter_dest.src_procc = dst_host;
+      inter_dest.dst_procc = next;
+      socket_id *info_forwad_next =
+          bpf_map_lookup_elem(&proc_to_address, &inter_dest);
+
+      if (info_forwad_next) {
+        __u8 src_mac[ETH_ALEN];
+        __u8 dst_mac[ETH_ALEN];
+        struct ethhdr *eth = (void *)(long)skb->data;
+        if ((void *)(eth + 1) > (void *)(long)skb->data_end) {
+          return TC_ACT_OK;
+        }
+        __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
+        __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
+        __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
+        __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
+
+        int dst_net = bpf_htonl(dst_host);
+        int next_net = bpf_htonl(next);
+
+        __builtin_memcpy(src_payload, &dst_net, sizeof(int));
+        __builtin_memcpy(dst_payload, &next_net, sizeof(int));
+
+        udph->source = bpf_htons(info_forwad_next->src_port);
+        udph->dest = bpf_htons(info_forwad_next->dst_port);
+        udph->check = 0;
+
+        iph->saddr = info_forwad_next->src_ip;
+        iph->daddr = info_forwad_next->dst_ip;
+        iph->check = ip_checksum_xdp(iph);
+
+        // //bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
+        // //bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
+        count_tx++;
+        int ret = bpf_clone_redirect(skb, skb->ingress_ifindex, 0);
+        if (ret < 0) {
+          // bpf_printk("Clone redirect failed: %d", ret);
+          return TC_ACT_OK;
+        }
+        // return bpf_redirect(skb->ingress_ifindex, 0);
+      }
+      return TC_ACT_OK;
     }
   } break;
   case MPI_REDUCE: {
@@ -428,12 +496,12 @@ static __always_inline int handle_original(struct __sk_buff *skb,
                                            struct iphdr *iph) {
 
   if (!iph) {
-    //bpf_printk("TC: IP header is NULL in handle_clone\n");
+    // bpf_printk("TC: IP header is NULL in handle_clone\n");
     return TC_ACT_OK;
   }
   struct udphdr *udph = (void *)iph + iph->ihl * 4;
   if (udph + 1 > (void *)(long)skb->data_end) {
-    //bpf_printk("TC: UDP header validation failed\n");
+    // bpf_printk("TC: UDP header validation failed\n");
     return TC_ACT_OK;
   }
 
@@ -526,11 +594,11 @@ static __always_inline int handle_original(struct __sk_buff *skb,
   __builtin_memcpy(&clock, clock_payload, sizeof(unsigned long));
   unsigned long clock_host = bpf_ntohl(clock);
 
-  //bpf_printk(
-      // "CASE 1 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
-      // "%d, tag: %d seq: %lu clock: %lu",
-      // root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
-      // tag_host, seq_host, clock_host);
+  // bpf_printk(
+  //  "CASE 1 root: %d, src: %d, dst: %d, opcode: %d, datatype: %d, len : "
+  //  "%d, tag: %d seq: %lu clock: %lu",
+  //  root_host, src_host, dst_host, opcode_host, datatype_host, len_host,
+  //  tag_host, seq_host, clock_host);
   // count = dst_host == 3 ? count + 1 : count;
   // if (dst_host == 3) {
 
@@ -636,13 +704,24 @@ static __always_inline int handle_original(struct __sk_buff *skb,
     int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
     if (!size_ptr)
       return TC_ACT_OK;
+    // if (src_host == 0 && seq_host == 0) {
+    //   start_time = bpf_ktime_get_ns();
+    // }
+    // __u64 current_time = bpf_ktime_get_ns();
+    // __u64 elapsed_ns = current_time - start_time;
+    // __u64 elapsed_sec = elapsed_ns / 1000000000;
+    // __u64 elapsed_usec = (elapsed_ns % 1000000000) / 1000;
+    // bpf_printk("MPI_BCAST_RING: dst=%d, elapsed_time=%lu.%06lu sec",
+    // dst_host,
+    //            elapsed_sec, elapsed_usec);
 
     skb->mark = MAGICK_MARK;
 
     // clone original packet and send to the application
+    count_pass++;
     int ret = bpf_clone_redirect(skb, skb->ingress_ifindex, BPF_F_INGRESS);
     if (ret < 0) {
-      //bpf_printk("Clone redirect failed: %d", ret);
+      // bpf_printk("Clone redirect failed: %d", ret);
       return TC_ACT_OK;
     }
 
@@ -651,7 +730,37 @@ static __always_inline int handle_original(struct __sk_buff *skb,
     // parse again the packet bc the clone
     ret = parse_ip_packet(skb, &iph);
     if (ret >= 0) {
-      //bpf_printk("Failed to parse cloned packet: %d", ret);
+      // bpf_printk("Failed to parse cloned packet: %d", ret);
+      return ret;
+    }
+
+    return handle_clone(skb, iph);
+  }
+  case MPI_BCAST_LINEAR: {
+    if (root_host == dst_host) {
+      return TC_ACT_OK;
+    }
+    int key_num_process = 0;
+    int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
+    if (!size_ptr)
+      return TC_ACT_OK;
+
+    skb->mark = MAGICK_MARK;
+
+    // clone original packet and send to the application
+    count_pass++;
+    int ret = bpf_clone_redirect(skb, skb->ingress_ifindex, BPF_F_INGRESS);
+    if (ret < 0) {
+      // bpf_printk("Clone redirect failed: %d", ret);
+      return TC_ACT_OK;
+    }
+
+    skb->mark = 0;
+
+    // parse again the packet bc the clone
+    ret = parse_ip_packet(skb, &iph);
+    if (ret >= 0) {
+      // bpf_printk("Failed to parse cloned packet: %d", ret);
       return ret;
     }
 
@@ -672,12 +781,12 @@ SEC("tc/ingress")
 int kfunc(struct __sk_buff *skb) {
   if (skb->mark == MAGICK_MARK) {
     skb->mark = 0;
-    //bpf_printk("Passing original cloned packet\n");
+    // bpf_printk("Passing original cloned packet\n");
     struct iphdr *iph;
 
     int ret = parse_ip_packet(skb, &iph);
     if (ret >= 0) {
-      //bpf_printk("Failed to parse cloned packet: %d", ret);
+      // bpf_printk("Failed to parse cloned packet: %d", ret);
       return ret;
     }
 
@@ -695,6 +804,9 @@ int kfunc(struct __sk_buff *skb) {
   }
 
   if (iph->saddr == bpf_htonl(3232261378)) { // src ip 192.168.101.2
+    // if (start_time == 0) {
+    //   start_time = bpf_ktime_get_ns();
+    // }
     return handle_original(skb, iph);
   }
 

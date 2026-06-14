@@ -4,18 +4,18 @@ GCC          := gcc
 UFLAGS       := -O3 -Wall 
 GDB          := -g -fsanitize=address -fno-omit-frame-pointer
 LIBS         := -lbpf -lelf -lz -lxdp -lm
-
+SRC		  := my_ebpf.c
 # KOBJ         := xdp_prog_kern.o
 # KMAP         := xdp_map_mpi.o
 # ULOADER      := xdp_loader
 # MPI     	 := MPI
 # KERNELMODULE := kernel_module_xdp.ko
-TARGETS := kfunc.c kfunc.bpf.c
+TARGET := kfunc
 
 .PHONY : all clean
 
 
-all: $(TARGETS) 
+all: MPI kfunc tc uprobe
 
 
 # $(KOBJ): xdp_prog_kern.c
@@ -31,13 +31,26 @@ all: $(TARGETS)
 # 	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
 
 MPI: ./MPI.c
-# 	$(GCC) $(UFLAGS) $(GDB) $< -o $@ $(LIBS)
-	$(GCC) $(UFLAGS)  $< -o $@ $(LIBS)
+# 	$(GCC) $(UFLAGS) $(GDB) $(SRC) $< -o $@ $(LIBS)
+	$(GCC) $(UFLAGS) $(SRC) $< -o $@ $(LIBS)
 
-kfunc: $(TARGETS)
-	clang -g -O2 --target=bpf -c $@.bpf.c -o $@.bpf.o -I ./kernel_module
-	bpftool gen skeleton $@.bpf.o > $@.bpf.skel.h
-	gcc -g -O2 -o $@ $@.c -lbpf
+kfunc: 
+	clang -g -O2 --target=bpf -c $(TARGET).bpf.c -o $(TARGET).bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
+	bpftool gen skeleton $(TARGET).bpf.o > $(TARGET).bpf.skel.h
+	gcc -g -O2 -o $(TARGET) $(TARGET).c -lbpf
+
+uprobe:
+	clang -g -O2 --target=bpf -D__TARGET_ARCH_x86 -c uprobe.bpf.c -o uprobe.bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
+	bpftool gen skeleton uprobe.bpf.o > uprobe.bpf.skel.h
+	gcc -g -O2 -o uprobe uprobe.c -lbpf
+
+kprobe:
+	clang -g -O2 --target=bpf -D__TARGET_ARCH_x86 -c kprobe.bpf.c -o kprobe.bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
+	bpftool gen skeleton kprobe.bpf.o > kprobe.bpf.skel.h
+	gcc -g -O2 -o kprobe kprobe.c -lbpf -lelf -lz
+
+tc:
+	make -C "bpf/tc" DEBUG=$(DEBUG)
 
 run:
 	sudo ./MPI -n 8 -i enp52s0f1np1
@@ -45,4 +58,6 @@ run:
 clean:
 	rm -f MPI
 # 	rm -f $(KOBJ) $(ULOADER)
-	rm -f $(TARGETS) $(TARGETS:=.bpf.o) $(TARGETS:=.bpf.skel.h)
+	rm -f $(TARGET) $(TARGET:=.bpf.o) $(TARGET:=.bpf.skel.h)
+	rm -f uprobe uprobe.bpf.o uprobe.bpf.skel.h
+	rm -f kprobe kprobe.bpf.o kprobe.bpf.skel.h

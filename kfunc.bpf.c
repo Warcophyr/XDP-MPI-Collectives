@@ -12,15 +12,14 @@
 #include <linux/udp.h>
 
 // #ifdef DEBUG
-// #define //bpf_printk(fmt, ...)                                                   \
-//   ({                                                                           \
-//     char ____fmt[] = fmt;                                                      \
-//     bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__);                 \
+// #define //bpf_printk(fmt, ...) \
+//   ({ \
+//     char ____fmt[] = fmt; \
+//     bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__); \
 //   })
 // #else
-// #define //bpf_printk(fmt, ...)                                                   \
-//   do {                                                                         \
-//   } while (0)
+// #define //bpf_printk(fmt, ...) \
+//   do { \ } while (0)
 // #endif
 
 #define __XDP_CLONE_PASS 5
@@ -53,6 +52,7 @@ typedef enum MPI_Datatype {
 typedef enum MPI_Collective {
   MPI_SEND,
   MPI_BCAST,
+  MPI_BCAST_LINEAR,
   MPI_BCAST_RING,
   MPI_REDUCE,
   MPI_SHATTER,
@@ -124,7 +124,7 @@ static __always_inline int parse_ip_packet(struct xdp_md *ctx,
 
   struct ethhdr *eth = data;
   if ((void *)(eth + 1) > data_end) {
-    //bpf_printk("TC: Ethernet header validation failed\n");
+    // bpf_printk("TC: Ethernet header validation failed\n");
     return XDP_PASS;
   }
 
@@ -136,14 +136,14 @@ static __always_inline int parse_ip_packet(struct xdp_md *ctx,
 
   struct iphdr *iph = (void *)(eth + 1);
   if ((void *)(iph + 1) > data_end) {
-    //bpf_printk("TC: IP header validation failed\n");
+    // bpf_printk("TC: IP header validation failed\n");
     return XDP_PASS;
   }
 
   // eBPF Verifier requirement: ensure the IP header length is at least
   // 5 words (20 bytes) to prevent invalid offsets.
   if (iph->ihl < 5) {
-    //bpf_printk("TC: Invalid IP header length\n");
+    // bpf_printk("TC: Invalid IP header length\n");
     return XDP_PASS;
   }
 
@@ -171,7 +171,9 @@ static __always_inline int parse_ip_packet(struct xdp_md *ctx,
 }
 
 // int __src_host = 0;
-__u32 count = 0;
+__u32 count_pass = 0;
+__u32 count_tx = 0;
+__u64 start_time = 0;
 
 static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
                                         struct iphdr *iph,
@@ -181,12 +183,12 @@ static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
   void *data_meta = (void *)(long)ctx->data_meta;
 
   if (!iph) {
-    //bpf_printk("TC: IP header is NULL in handle_clone\n");
+    // bpf_printk("TC: IP header is NULL in handle_clone\n");
     return XDP_PASS;
   }
   udph = (void *)iph + iph->ihl * 4;
   if (udph + 1 > (void *)(long)ctx->data_end) {
-    //bpf_printk("TC: UDP header validation failed\n");
+    // bpf_printk("TC: UDP header validation failed\n");
     return XDP_PASS;
   }
 
@@ -362,7 +364,8 @@ static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
         int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
         if (size_ptr) {
           int size = *size_ptr;
-          int next = (int)(((unsigned)((dst_host) + 1)) % ((unsigned)(size)));
+          int next =
+              (int)(((unsigned)((dst_host) + iter_copy)) % ((unsigned)(size)));
           if (root_host == next) {
             return XDP_PASS;
           }
@@ -381,7 +384,7 @@ static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
 
             int dst_net = bpf_htonl(dst_host);
             int next_net = bpf_htonl(next);
-            //bpf_printk("new_src: %d next: %d", dst_host, next);
+            // bpf_printk("new_src: %d next: %d", dst_host, next);
             __builtin_memcpy(src_payload, &dst_net, sizeof(int));
             __builtin_memcpy(dst_payload, &next_net, sizeof(int));
 
@@ -394,6 +397,64 @@ static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
             iph->check = ip_checksum_xdp(iph);
             // //bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
             // //bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
+            count_tx++;
+            return XDP_TX;
+          }
+        }
+      } else {
+        return XDP_PASS;
+      }
+    }
+    return XDP_PASS;
+  } break;
+  case MPI_BCAST_LINEAR: {
+    if (root_host == dst_host) {
+      return XDP_PASS;
+    }
+    if (ctx->data + sizeof(__u32) <= ctx->data_end) {
+      if (ctx->data_meta + sizeof(__u32) <= ctx->data) {
+        int iter_copy = 0;
+        __builtin_memcpy(&iter_copy, data_meta, sizeof(iter_copy));
+        // bpf_printk("num_copy: %d", iter_copy);
+        int key_num_process = 0;
+        int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
+        if (size_ptr) {
+          int size = *size_ptr;
+          int next =
+              (int)(((unsigned)((dst_host) + iter_copy)) % ((unsigned)(size)));
+          if (root_host == next) {
+            return XDP_PASS;
+          }
+          // bpf_printk("dst_host: %d next: %d", dst_host, next);
+          tuple_process inter_dest = {0};
+          inter_dest.src_procc = dst_host;
+          inter_dest.dst_procc = next;
+          socket_id *info_forwad_next =
+              bpf_map_lookup_elem(&proc_to_address, &inter_dest);
+          if (info_forwad_next) {
+            __u8 src_mac[ETH_ALEN];
+            __u8 dst_mac[ETH_ALEN];
+            __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
+            __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
+            __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
+            __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
+
+            int dst_net = bpf_htonl(dst_host);
+            int next_net = bpf_htonl(next);
+            // bpf_printk("new_src: %d next: %d", dst_host, next);
+            __builtin_memcpy(src_payload, &dst_net, sizeof(int));
+            __builtin_memcpy(dst_payload, &next_net, sizeof(int));
+
+            udph->source = bpf_htons(info_forwad_next->src_port);
+            udph->dest = bpf_htons(info_forwad_next->dst_port);
+            udph->check = 0;
+
+            iph->saddr = info_forwad_next->src_ip;
+            iph->daddr = info_forwad_next->dst_ip;
+            iph->check = ip_checksum_xdp(iph);
+            // //bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
+            // //bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
+            count_tx++;
             return XDP_TX;
           }
         }
@@ -421,12 +482,12 @@ static __always_inline int handle_original(struct xdp_md *ctx,
   void *data_meta = (void *)(long)ctx->data_meta;
 
   if (!iph) {
-    //bpf_printk("TC: IP header is NULL in handle_clone\n");
+    // bpf_printk("TC: IP header is NULL in handle_clone\n");
     return XDP_PASS;
   }
   udph = (void *)iph + iph->ihl * 4;
   if (udph + 1 > (void *)(long)ctx->data_end) {
-    //bpf_printk("TC: UDP header validation failed\n");
+    // bpf_printk("TC: UDP header validation failed\n");
     return XDP_PASS;
   }
 
@@ -508,6 +569,12 @@ static __always_inline int handle_original(struct xdp_md *ctx,
                         sizeof(unsigned long);
   __builtin_memcpy(&clock, clock_payload, sizeof(unsigned long));
   unsigned long clock_host = bpf_ntohl(clock);
+
+  int key_num_process = 0;
+  int *size_ptr = bpf_map_lookup_elem(&num_process, &key_num_process);
+  if (!size_ptr)
+    return XDP_ABORTED;
+  int size = *size_ptr;
   switch (opcode_host) {
   case MPI_SEND:
     return XDP_PASS;
@@ -523,7 +590,31 @@ static __always_inline int handle_original(struct xdp_md *ctx,
     if (root_host == dst_host) {
       return XDP_PASS;
     } else {
+      // if (src_host == 0 && seq_host == 0) {
+      //   start_time = bpf_ktime_get_ns();
+      // }
+      // __u64 current_time = bpf_ktime_get_ns();
+      // __u64 elapsed_ns = current_time - start_time;
+      // __u64 elapsed_sec = elapsed_ns / 1000000000;
+      // __u64 elapsed_usec = (elapsed_ns % 1000000000) / 1000;
+      // bpf_printk("MPI_BCAST_RING: dst=%d, elapsed_time=%lu.%06lu sec",
+      // dst_host,
+      //            elapsed_sec, elapsed_usec);
+      // count_pass++;
       return XDP_CLONE_PASS(1);
+    }
+  } break;
+  case MPI_BCAST_LINEAR: {
+    if (root_host == dst_host) {
+      // bpf_printk("query size: %d", size);
+      return XDP_PASS;
+    } else if (root_host == src_host) {
+      // bpf_printk("root: %d, src: %d", root_host, src_host);
+      count_pass++;
+      return XDP_CLONE_PASS(size);
+    } else {
+      // bpf_printk("size: %d", size);
+      return XDP_PASS;
     }
   } break;
   case MPI_REDUCE: {
@@ -555,13 +646,16 @@ int kfunc(struct xdp_md *ctx) {
   if (iph->saddr == bpf_htonl(3232261378)) { // src ip 192.168.101.2
                                              // //bpf_printk("handle clone\n");
     if (ctx->data_meta + sizeof(__u32) <= ctx->data) {
-      // //bpf_printk("handle clone\n");
+      // bpf_printk("handle clone");
       return handle_clone(ctx, eth, iph, udph);
     } else {
-
+      if (start_time == 0) {
+        start_time = bpf_ktime_get_ns();
+      }
       return handle_original(ctx, eth, iph, udph);
     }
-    // } else if (iph->saddr == bpf_htonl(3232261377)) { // src ip 192.168.101.1
+    // } else if (iph->saddr == bpf_htonl(3232261377)) { // src ip
+    // 192.168.101.1
     //   //bpf_printk("handle clone\n");
   } else {
     return XDP_PASS;

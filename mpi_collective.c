@@ -1,5 +1,21 @@
+#include "mpi_global_variable.h"
 #define _GNU_SOURCE
 #include "mpi_collective.h"
+
+void insert_lfence() {
+  // Il clobber "memory" agisce come barriera per il compilatore
+  __asm__ __volatile__("lfence" ::: "memory");
+}
+
+void insert_mfence() { __asm__ __volatile__("mfence" ::: "memory"); }
+
+#define GET_TIME()                                                             \
+  ({                                                                           \
+    struct timespec ts;                                                        \
+    clock_gettime(CLOCK_MONOTONIC, &ts);                                       \
+    (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;                              \
+  })
+
 size_t WORD_SIZE = 1;
 MPI_process_info *MPI_PROCESS = NULL;
 // Global peer address table
@@ -23,7 +39,8 @@ int extract_5tuple(int sockfd, struct socket_id *id) {
 
   // For UDP monitoring, we want to capture both send and receive patterns
   // Set dst_ip to localhost since all communication is local
-  inet_pton(AF_INET, "192.168.101.2", &id->dst_ip);
+  // the cake is a lie
+  inet_pton(AF_INET, GRECALE_IP, &id->dst_ip);
   id->dst_port = 0; // Will be filled when we know the peer
 
   return 0;
@@ -74,7 +91,7 @@ int create_udp_socket(int port) {
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  // addr.sin_addr.s_addr = inet_addr("192.168.101.2");
+  // addr.sin_addr.s_addr = inet_addr(MAESTRALE_IP);
 
   if (bind(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     perror("bind failed\n");
@@ -938,7 +955,6 @@ static int __mpi_send(const void *buf, int count, MPI_Datatype datatype,
 
       void *src_send = (char *)message + (sizeof(char) * 4) + sizeof(int);
       generic_hton(src_send, &MPI_PROCESS->rank, sizeof(int), 1);
-
       void *dst_send = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
       generic_hton(dst_send, &dest, sizeof(int), 1);
 
@@ -1274,9 +1290,9 @@ int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
                    sizeof(MPI_Collective) + sizeof(MPI_Datatype);
   generic_ntoh(&len, len_recv, sizeof(int), 1);
 
-  // Add tag to message header
-  // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
-  // 4)))));
+  // // Add tag to message header
+  // // printf("%d\n", ntohl(*((int *)((char *)message + (sizeof(char) *
+  // // 4)))));
 
   void *tag_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
                    sizeof(MPI_Collective) + sizeof(MPI_Datatype) + sizeof(int);
@@ -1772,8 +1788,9 @@ int mpi_recv_no_ack(void *buf, int count, MPI_Datatype datatype, int source,
     ssize_t received = recvfrom(udp_socket_fd, message, total_size, 0,
                                 (struct sockaddr *)&sender_addr, &sender_len);
 
-    if (received < sizeof(int)) {
+    if (received < 0) {
       free(message);
+      printf("failed recv: %d\n", (int)received);
       // __mpi_send_tcp_lost_packet(MPI_NACK, MPI_PROCESS->rank, source, tag,
       //                            MPI_SEND);
       // int err = __mpi_recv_tcp(buf, count, datatype, source, tag);
@@ -1843,6 +1860,8 @@ int mpi_recv_no_ack(void *buf, int count, MPI_Datatype datatype, int source,
 
     if (data_size != size) {
       free(message);
+      printf("RANK: %d seq: %lu, recv:%d expected:%d\n", MPI_PROCESS->rank, seq,
+             data_size, size);
       // __mpi_send_tcp_lost_packet(MPI_NACK, MPI_PROCESS->rank, source, tag,
       //                            MPI_SEND);
       // int err = __mpi_recv_tcp(buf, count, datatype, source, tag);
@@ -1930,6 +1949,8 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
   if (size < 1) {
     return -1;
   }
+
+  // double start = GET_TIME();
 
   int total_size = (sizeof(char) * 4) + (sizeof(int) * 3) +
                    sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
@@ -2267,13 +2288,21 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
 
     struct sockaddr_in sender_addr;
     socklen_t sender_len = sizeof(sender_addr);
+    // double pre = GET_TIME();
 
+    // fprintf(stderr, "Rank pre recv: %d  %lf sec\n", MPI_PROCESS->rank,
+    //         (double)(pre - start));
     // Receive UDP message using the global socket
     ssize_t received = recvfrom(udp_socket_fd, message, total_size, 0,
                                 (struct sockaddr *)&sender_addr, &sender_len);
+    // double post = GET_TIME();
 
-    if (received < sizeof(int)) {
+    // fprintf(stderr, "Rank post recv: %d  %lf sec\n", MPI_PROCESS->rank,
+    //         (double)(post - start));
+
+    if (received < 0) {
       free(message);
+      printf("lost packet recv: %d\n", (int)received);
       __mpi_send_tcp_lost_packet(MPI_NACK, MPI_PROCESS->rank, source, tag,
                                  MPI_SEND);
       int err = __mpi_recv_tcp(buf, count, datatype, source, tag);
@@ -2419,6 +2448,11 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
     }
     // printf("MY RANK: %d, source: %d\n", MPI_PROCESS->rank, root);
     __mpi_send_tcp_lost_packet(MPI_ACK, MPI_PROCESS->rank, root, tag, MPI_SEND);
+
+    // double end = GET_TIME();
+
+    // fprintf(stderr, "Rank end: %d  %lf sec\n", MPI_PROCESS->rank,
+    //         (double)(end - start));
   }
   /* code */
   return count;
@@ -2477,13 +2511,21 @@ int mpi_barrier_ring(void) {
   // sleep(1);
   if (rank == 0) {
     // Root: send to next, then receive from prev
+    // fprintf(stderr, "%d: Process next %d, prev %d entering barrier\n", rank,
+    //         next, prev);
     __mpi_send_tcp(&dummy, 1, MPI_INT, rank, next, tag, MPI_SEND);
     __mpi_recv_tcp(&dummy, 1, MPI_INT, prev, tag);
   } else {
+    // fprintf(stderr, "%d: Process: next %d, prev %d entering barrier\n", rank,
+    //         next, prev);
+
     // Others: receive from prev, then send to next
     __mpi_recv_tcp(&dummy, 1, MPI_INT, prev, tag);
     __mpi_send_tcp(&dummy, 1, MPI_INT, rank, next, tag, MPI_SEND);
   }
+  // fprintf(stderr, "%d: Process next %d, prev %d exiting barrier\n", rank,
+  // next,
+  //         prev);
   // sleep(1);
 
   return 0;
@@ -2658,6 +2700,7 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
   int prev = (rank - 1 + size) % size;
   int pred_root = (root - 1 + size) % size;
 
+  // fprintf(stderr, "[coll rank: %d]: Entered ring\n", rank);
   // 1) Root kicks off by sending to (root+1)%size
   if (rank == root) {
     // printf("Process %d (root) sending to %d\n", rank, next);
@@ -2682,7 +2725,9 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
       unsigned long seq;
       unsigned long id;
 
+      // fprintf(stderr, "[coll rank: %d]: Received message\n", rank);
       int err = recv(MPI_PROCESS->socket_tcp_fd[i], message, MPI_HEADER, 0);
+      // fprintf(stderr, "[coll rank: %d]: Message received\n", rank);
       if (err == -1) {
         printf("failed recv\n");
         exit(EXIT_SUCCESS);
@@ -2734,16 +2779,128 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
         free(message);
       }
     }
+    // fprintf(stderr, "[coll rank: %d]: Root broadcast sent, continuing\n",
+    // rank);
   }
 
   // 2) Everyone except root must receive from their predecessor
   if (rank != root) {
     // printf("Process %d receiving from %d\n", rank, prev);
+    // fprintf(stderr, "[coll rank: %d]: waiting for RECV\n", rank);
     if (mpi_recv(buf, count, datatype, prev, tag) < 0) {
       fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
       return -1;
     }
   }
+
+  // fprintf(stderr, "[coll rank: %d]: end coll\n", rank);
+
+  return 0;
+}
+
+int mpi_bcast_linear_xdp(void *buf, int count, MPI_Datatype datatype,
+                         int root) {
+  int rank = MPI_PROCESS->rank;
+  int size = WORD_SIZE;
+  int tag = 1; // you can choose any tag
+  int next = (rank + 1) % size;
+  int prev = (rank - 1 + size) % size;
+  int pred_root = (root - 1 + size) % size;
+
+  // fprintf(stderr, "[coll rank: %d]: Entered ring\n", rank);
+  // 1) Root kicks off by sending to (root+1)%size
+  if (rank == root) {
+    // printf("Process %d (root) sending to %d\n", rank, next);
+    __mpi_send(buf, count, datatype, root, next, tag, MPI_BCAST_LINEAR);
+    // usleep(1000);
+    for (size_t i = 0; i < WORD_SIZE; i++) {
+      if (MPI_PROCESS->rank == i)
+        continue;
+
+      void *message = malloc(MPI_HEADER);
+      if (!message) {
+        perror("malloc failed");
+        return -1;
+      }
+      int root;
+      int src;
+      int dst;
+      MPI_Collective collective;
+      MPI_Datatype __datatype;
+      int len;
+      int tag_;
+      unsigned long seq;
+      unsigned long id;
+
+      // fprintf(stderr, "[coll rank: %d]: Received message\n", rank);
+      int err = recv(MPI_PROCESS->socket_tcp_fd[i], message, MPI_HEADER, 0);
+      // fprintf(stderr, "[coll rank: %d]: Message received\n", rank);
+      if (err == -1) {
+        printf("failed recv\n");
+        exit(EXIT_SUCCESS);
+      }
+      char header_mpi[4];
+      generic_ntoh(header_mpi, message, sizeof(char), 4);
+
+      void *root_recv = (char *)message + (sizeof(char) * 4);
+      generic_ntoh(&root, root_recv, sizeof(int), 1);
+
+      void *src_recv = (char *)message + (sizeof(char) * 4) + sizeof(int);
+      generic_ntoh(&src, src_recv, sizeof(int), 1);
+
+      void *dst_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 2);
+      generic_ntoh(&dst, dst_recv, sizeof(int), 1);
+
+      void *collective_recv =
+          (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3);
+      generic_ntoh(&collective, collective_recv, sizeof(MPI_Collective), 1);
+
+      void *datatype_recv = (char *)message + (sizeof(char) * 4) +
+                            (sizeof(int) * 3) + sizeof(MPI_Collective);
+      generic_ntoh(&__datatype, datatype_recv, sizeof(MPI_Datatype), 1);
+
+      void *len_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype);
+      generic_ntoh(&len, len_recv, sizeof(int), 1);
+
+      void *tag_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + sizeof(int);
+      generic_ntoh(&tag_, tag_recv, sizeof(int), 1);
+
+      void *seq_recv = (char *)message + (sizeof(char) * 4) +
+                       (sizeof(int) * 3) + sizeof(MPI_Collective) +
+                       sizeof(MPI_Datatype) + (sizeof(int) * 2);
+      generic_ntoh(&seq, seq_recv, sizeof(unsigned long), 1);
+
+      void *id_recv = (char *)message + (sizeof(char) * 4) + (sizeof(int) * 3) +
+                      sizeof(MPI_Collective) + sizeof(MPI_Datatype) +
+                      (sizeof(int) * 2) + sizeof(unsigned long);
+      generic_ntoh(&id, id_recv, sizeof(unsigned long), 1);
+      if (__datatype == MPI_NACK) {
+
+        __mpi_send_tcp(buf, count, datatype, MPI_PROCESS->rank, root, tag,
+                       MPI_SEND);
+
+        free(message);
+      }
+    }
+    // fprintf(stderr, "[coll rank: %d]: Root broadcast sent, continuing\n",
+    // rank);
+  }
+
+  // 2) Everyone except root must receive from their predecessor
+  if (rank != root) {
+    // printf("Process %d receiving from %d\n", rank, prev);
+    // fprintf(stderr, "[coll rank: %d]: waiting for RECV\n", rank);
+    if (mpi_recv(buf, count, datatype, prev, tag) < 0) {
+      fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
+      return -1;
+    }
+  }
+
+  // fprintf(stderr, "[coll rank: %d]: end coll\n", rank);
 
   return 0;
 }

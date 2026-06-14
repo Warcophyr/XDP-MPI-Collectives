@@ -1,0 +1,10 @@
+results_*
+*.o
+*.bpf.o
+*.skel.h
+vmlinux.h
+__pycache__
+kfunc
+kprobe
+out
+*.png

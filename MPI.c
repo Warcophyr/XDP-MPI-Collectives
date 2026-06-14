@@ -9,13 +9,39 @@
 
 #define PORT 5000
 #define BUFFER_SIZE 1024
-#define MAESTRALE_IP "192.168.101.1"
-#define GRECALE_IP "192.168.101.2"
 
 FILE *fptr;
 int N = 1000;
 char outputname[64];
-int warmup_iterations = 5;
+int warmup_iterations = 0;
+
+#define GET_TIME()                                                             \
+  ({                                                                           \
+    struct timespec ts;                                                        \
+    clock_gettime(CLOCK_MONOTONIC, &ts);                                       \
+    (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;                              \
+  })
+
+int (*algo)(void *, int, MPI_Datatype, int) = &mpi_bcast_ring_xdp;
+
+void help() {
+  printf("Usage: ./mpi_collective [OPTIONS]\n");
+  printf("Options:\n");
+  printf("  -h, --help            Show this help message and exit\n");
+  printf("  -o, --output FILE     Specify output file for results (default: "
+         "test.csv)\n");
+  printf("  -t, --tc              Use TC BPF program instead of XDP\n");
+  printf("  -a, --algo ALGO       Choose algorithm (ring, linear, ring_eager) "
+         "(default: ring)\n");
+  printf("  -s, --size SIZE       Set the size of the data to broadcast "
+         "(default: 1000)\n");
+  printf("  -v, --version         Show version information and exit\n");
+  printf("  -n, --np NUM          Set the number of processes (default: 1)\n");
+  printf("  -i, --interface IFACE Specify network interface to attach BPF "
+         "program (default: lo)\n");
+  printf("  -w, --warmup ITER     Set the number of warmup iterations before "
+         "measurement (default: 0)\n");
+}
 
 int main(int argc, char *argv[]) {
   setlocale(LC_ALL, "");
@@ -32,6 +58,7 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, 0, 'h'},
       {"output", required_argument, 0, 'o'},
       {"tc", no_argument, 0, 't'},
+      {"algo", required_argument, 0, 'a'},
       {"size", required_argument, 0, 's'},
       {"version", no_argument, 0, 'v'},
       {"np", required_argument, 0, 'n'},
@@ -39,7 +66,7 @@ int main(int argc, char *argv[]) {
       {"warmup", required_argument, 0, 'w'},
       {0, 0, 0, 0}};
 
-  while ((option = getopt_long(argc, argv, "hov:n:i:ts:w:", long_option,
+  while ((option = getopt_long(argc, argv, "ho:v:n:i:ts:w:a:", long_option,
                                &option_index)) != -1) {
     switch (option) {
     case 'h':
@@ -47,6 +74,8 @@ int main(int argc, char *argv[]) {
       break;
     case 'o':
       printf("Output file: %s\n", optarg);
+      strncpy(outputname, optarg, sizeof(outputname) - 1);
+      outputname[sizeof(outputname) - 1] = '\0';
       break;
     case 's':
       printf("Size option selected: %s\n", optarg);
@@ -90,6 +119,19 @@ int main(int argc, char *argv[]) {
         interface[2] = '\0';
       }
     } break;
+    case 'a':
+      printf("Algorithm option selected: %s\n", optarg);
+      if (strcmp(optarg, "ring") == 0) {
+        algo = &mpi_bcast_ring_xdp;
+      } else if (strcmp(optarg, "linear") == 0) {
+        algo = &mpi_bcast_linear_xdp;
+      } else if (strcmp(optarg, "ring_eager") == 0) {
+        algo = &mpi_bcast_ring_xdp_eager;
+      } else {
+        fprintf(stderr, "Unknown algorithm: %s\n", optarg);
+        exit(EXIT_FAILURE);
+      }
+      break;
     case 'w':
       warmup_iterations = atoi(optarg);
       printf("Warmup iterations: %d\n", warmup_iterations);
@@ -107,9 +149,15 @@ int main(int argc, char *argv[]) {
   socklen_t len = sizeof(cliaddr);
   //   const char *msg = "Hello UDP!";
   int number = 0;
-  
-  strcpy(outputname, "test.csv");
+
+  if (strlen(outputname) == 0) {
+    strcpy(outputname, "test.csv");
+  }
   fptr = fopen(outputname, "a");
+  if (fptr == NULL) {
+    perror("Error opening output file");
+    exit(EXIT_FAILURE);
+  }
 
   // Create UDP socket
   if ((sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
@@ -169,6 +217,20 @@ int main(int argc, char *argv[]) {
     perror("loader attach fail\n");
     exit(EXIT_FAILURE);
   }
+
+  int prog_id;
+  struct bpf_prog_info info = {};
+  __u32 info_len = sizeof(info);
+
+  err = bpf_obj_get_info_by_fd(loader.prog_fd, &info, &info_len);
+  if (err) {
+    printf("Error getting program info: %d\n", err);
+  }
+
+  prog_id = info.id;
+  printf("Loaded BPF program with ID: %d\n", prog_id);
+  printf("Press Enter to continue...");
+  // getchar();
 
   int adress_to_proc_fd = ebpf_loader_get_map_fd(&loader, "address_to_proc");
   int proc_to_adress_fd = ebpf_loader_get_map_fd(&loader, "proc_to_address");
@@ -263,9 +325,6 @@ int main(int argc, char *argv[]) {
           }
         }
 
-
-
-
         if (MPI_PROCESS->rank == 0) {
           // printf("MY_RANK: %d\n", MPI_PROCESS->rank);
           // for (int i = 0; i < n; i++) {
@@ -311,32 +370,57 @@ int main(int argc, char *argv[]) {
         //   y[n - 2] = 'E';
         // }
 
+        mpi_barrier_ring();
         // Warmup phase
         for (int w = 0; w < warmup_iterations; w++) {
-          mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-          fprintf(stderr, "exit %d iteration %d\n", MPI_PROCESS->rank, w + 1);
+          // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+          // mpi_bcast_ring_xdp_eager(&y, sizeof(y) / sizeof(char), MPI_CHAR,
+          // 0); mpi_bcast_linear_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR,
+          // 0); fprintf(stderr, "exit %d iteration %d\n", MPI_PROCESS->rank, w
+          // + 1);
+          algo(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
           mpi_barrier_ring();
+          // if (MPI_PROCESS->rank == 0) {
+          //   fprintf(stderr, "\n");
+          // }
         }
 
-        fprintf(stderr, "Process %d completed warmup iterations\n", MPI_PROCESS->rank);
-
-
+        // fprintf(stderr, "Process %d completed warmup iterations\n",
+        //         MPI_PROCESS->rank);
 
         // Actual measurement
-        clock_t start, end;
-        
-        start = clock();
-        mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-        end = clock();
+        // clock_t start, end;
 
-        // Use write() for atomic file writes to avoid race conditions between processes
+        // start = clock();
+        double start = GET_TIME();
+        // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+        // mpi_bcast_ring_xdp_eager(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+        algo(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+        // mpi_bcast_linear_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+        double end = GET_TIME();
+
+        mpi_barrier_ring();
+        // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+        // mpi_barrier_ring();
+        // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+        // mpi_barrier_ring();
+        // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+        // mpi_barrier_ring();
+        // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
+        // mpi_barrier_ring();
+        // end = clock();
+        // Use write() for atomic file writes to avoid race conditions between
+        // processes
         char timing_buffer[256];
-        int bytes_written = snprintf(timing_buffer, sizeof(timing_buffer), "%d,%lf\n", 
-                                     MPI_PROCESS->rank,
-                                     (((double)(end - start)) / CLOCKS_PER_SEC));
+        int bytes_written =
+            snprintf(timing_buffer, sizeof(timing_buffer), "%d,%lf\n",
+                     MPI_PROCESS->rank, (double)(end - start));
         if (bytes_written > 0) {
-            write(fileno(fptr), timing_buffer, bytes_written);
+          write(fileno(fptr), timing_buffer, bytes_written);
         }
+
+        fprintf(stderr, "Rank: %d  %lf sec\n", MPI_PROCESS->rank,
+                (double)(end - start));
 
         // double __cpu_time_used = 0.0;
         // // for (size_t _ = 0; _ < 10; _++) {
@@ -434,22 +518,21 @@ int main(int argc, char *argv[]) {
         //   wait(NULL); // wait for each child to finish
         // }
         // for (size_t r = 0; r < WORD_SIZE; r++) {
-        //   // mpi_barrier_ring();
+        //   mpi_barrier_ring();
         //   if (MPI_PROCESS->rank == r) {
-        //     printf("Rank: %d: \n", MPI_PROCESS->rank);
-        //     for (size_t i = 0; i < (sizeof(x) / sizeof(int)) - 1; i++) {
-        //       printf("%d ", x[i]);
-        //     }
-        //     printf("\n");
-        //     fflush(stdout);
+        //     printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y),
+        //            y);
+        //     // printf("\n");
         //   }
-        //   // mpi_barrier_ring();
+        //   printf("\n");
+        //   // fflush(stdout);
         // }
-        if (MPI_PROCESS->rank == 1 || MPI_PROCESS->rank == 2) {
-          printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y), y);
-          printf("\n");
-          fflush(stdout);
-        }
+        // mpi_barrier_ring();
+        // if (MPI_PROCESS->rank == 1 || MPI_PROCESS->rank == 6) {
+        // if (MPI_PROCESS->rank == 6) {
+        //   printf("Rank: %d: len: %ld \n%s\n", MPI_PROCESS->rank, strlen(y),
+        //   y); printf("\n"); fflush(stdout);
+        // }
 
         // if (MPI_PROCESS->rank == 0 || 1 || 2) {
         //       printf("Rank: %d: \n", MPI_PROCESS->rank);
