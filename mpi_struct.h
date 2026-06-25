@@ -128,4 +128,5 @@ typedef struct EBPF_info {
   int address_to_proc;
   int proc_to_address;
   int num_process;
+  int xsk_map;
 } EBPF_info;

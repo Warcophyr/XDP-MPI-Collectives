@@ -1,0 +1,129 @@
+#!/usr/bin/env bpftrace
+/*
+ * trace_latency.bt — measure the wall-clock latency of a function
+ *                    including ALL children (callees).
+ *
+ * Usage (kernel function):
+ *   sudo bpftrace trace_latency.bt -e '...' -- <function_name>
+ *
+ * Usage with this script directly:
+ *   sudo FUNC=<function_name>  bpftrace trace_latency.bt          # kernel
+ *   sudo FUNC=<bin>:<function> bpftrace trace_latency.bt          # userspace
+ *
+ * Examples:
+ *   sudo FUNC=do_sys_open          bpftrace trace_latency.bt
+ *   sudo FUNC=/lib/libc.so.6:read  bpftrace trace_latency.bt
+ *   sudo FUNC=/usr/bin/myapp:main  bpftrace trace_latency.bt
+ *
+ * How it works:
+ *   uprobe/kprobe  fires at function ENTRY  → records nsecs timestamp
+ *   uretprobe/kretprobe fires at RETURN     → computes elapsed time
+ *   Because the entire subtree (all child calls) runs between entry and
+ *   return of the outer function, the delta captures total subtree latency.
+ *
+ * Output:
+ *   Per-call latency lines + a latency histogram on exit (Ctrl-C).
+ *
+ * Requirements:
+ *   - Linux kernel >= 4.9 with BPF enabled
+ *   - bpftrace >= 0.9
+ *   - For userspace targets: the binary must NOT be stripped, or use
+ *     DWARF/BTF symbols. For kernel targets: kernel debug symbols optional.
+ */
+
+/* -------------------------------------------------------------------------
+ * Determine probe type from the FUNC environment variable:
+ *   - Contains ':'  → userspace  (uprobe / uretprobe)
+ *   - No ':'        → kernel     (kprobe / kretprobe)
+ *
+ * bpftrace resolves $1 at script load time via the env variable.
+ * Set FUNC before running:
+ *   sudo FUNC=do_sys_open bpftrace trace_latency.bt
+ *   sudo FUNC=/usr/bin/nginx:ngx_http_process_request bpftrace trace_latency.bt
+ * -------------------------------------------------------------------------*/
+
+BEGIN
+{
+    /* Print banner so the user knows the script is live */
+    printf("Tracing function: %s\n", str($1));
+    printf("%-8s %-20s %-10s  %s\n",
+           "TID", "COMM", "LATENCY(us)", "FUNCTION");
+    printf("%-8s %-20s %-10s  %s\n",
+           "-------", "-------------------", "----------", "--------");
+}
+
+
+/* =========================================================================
+ * KERNEL probe  (no ':' in the function name)
+ * kprobe fires before the first instruction; kretprobe fires at RET.
+ * ========================================================================= */
+
+// kprobe:$1
+// {
+//     /* Record the entry timestamp keyed by thread ID.
+//      * Using tid (thread ID) as the key means concurrent threads each get
+//      * their own independent timer — no cross-talk between threads. */
+//     @start_k[tid] = nsecs;
+// }
+//
+// kretprobe:$1
+// / @start_k[tid] /    /* guard: only act if we captured an entry */
+// {
+//     $latency_ns = nsecs - @start_k[tid];
+//     $latency_us = $latency_ns / 1000;
+//
+//     /* Per-call output line */
+//     printf("%-8d %-20s %-10llu  %s\n",
+//            tid, comm, $latency_us, str($1));
+//
+//     /* Accumulate into a power-of-2 histogram (buckets in microseconds) */
+//     @latency_hist_k = hist($latency_us);
+//
+//     /* Cleanup the per-thread entry to avoid stale data on the next call */
+//     delete(@start_k[tid]);
+// }
+//
+
+/* =========================================================================
+ * USERSPACE probe  (function name contains ':')
+ * uprobe attaches to the entry instruction in the ELF binary;
+ * uretprobe attaches at the RET instruction(s).
+ *
+ * bpftrace splits "binary:function" at the colon automatically.
+ * ========================================================================= */
+
+uprobe:/mnt/shared_p2p/XDP_CLONE/XDP-MPI-Collectives/MPI:mpi_bcast_ring_xdp
+{
+    @start_u[tid] = nsecs;
+}
+
+uretprobe:/mnt/shared_p2p/XDP_CLONE/XDP-MPI-Collectives/MPI:mpi_bcast_ring_xdp
+/ @start_u[tid] /
+{
+    $latency_ns = nsecs - @start_u[tid];
+    $latency_us = $latency_ns / 1000;
+
+    printf("%-8d %-20s %-10llu  %s\n",
+           tid, comm, $latency_us, str($1));
+
+    @latency_hist_u = hist($latency_us);
+
+//     delete(@start_u[tid]);
+}
+
+
+/* =========================================================================
+ * Cleanup: print summary histogram on Ctrl-C
+ * ========================================================================= */
+
+END
+{
+    // printf("\n=== Latency histogram (kernel probe, microseconds) ===\n");
+    // print(@latency_hist_k);
+
+    printf("\n=== Latency histogram (userspace probe, microseconds) ===\n");
+    print(@latency_hist_u);
+
+    /* Flush any leftover per-thread start timestamps */
+    clear(@start_u);
+}

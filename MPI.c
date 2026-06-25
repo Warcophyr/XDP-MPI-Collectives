@@ -41,6 +41,8 @@ void help() {
          "program (default: lo)\n");
   printf("  -w, --warmup ITER     Set the number of warmup iterations before "
          "measurement (default: 0)\n");
+  printf("  -x, --xsk             Use AF_XDP zero-copy receive instead of UDP "
+         "sockets (requires one NIC queue per rank)\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -51,6 +53,7 @@ int main(int argc, char *argv[]) {
   int option_index = 0;
   char *interface = NULL;
   int use_tc = 0;
+  int naive = 0;
   char *bpf_prog_path = malloc(sizeof(char) * 64);
   strcpy(bpf_prog_path, "kfunc.bpf.o");
 
@@ -61,12 +64,14 @@ int main(int argc, char *argv[]) {
       {"algo", required_argument, 0, 'a'},
       {"size", required_argument, 0, 's'},
       {"version", no_argument, 0, 'v'},
+      {"naive", no_argument, 0, 'z'},
       {"np", required_argument, 0, 'n'},
       {"interface", optional_argument, 0, 'i'},
       {"warmup", required_argument, 0, 'w'},
+      {"xsk", no_argument, 0, 'x'},
       {0, 0, 0, 0}};
 
-  while ((option = getopt_long(argc, argv, "ho:v:n:i:ts:w:a:", long_option,
+  while ((option = getopt_long(argc, argv, "ho:v:n:i:ts:w:a:x:z", long_option,
                                &option_index)) != -1) {
     switch (option) {
     case 'h':
@@ -136,6 +141,18 @@ int main(int argc, char *argv[]) {
       warmup_iterations = atoi(optarg);
       printf("Warmup iterations: %d\n", warmup_iterations);
       break;
+    case 'x':
+      use_xsk = 1;
+      strcpy(bpf_prog_path, "bpf/xdp/mpi_xsk.bpf.o");
+      if (access(bpf_prog_path, F_OK) != 0) {
+        fprintf(stderr, "XSK BPF program not found at %s\n", bpf_prog_path);
+        exit(EXIT_FAILURE);
+      }
+      printf("AF_XDP (XSK) option selected\n");
+      break;
+    case 'z':
+      naive = 1;
+      break;
     case '?':
       perror("Unknown option. Use --help.\n");
       exit(EXIT_FAILURE);
@@ -149,6 +166,10 @@ int main(int argc, char *argv[]) {
   socklen_t len = sizeof(cliaddr);
   //   const char *msg = "Hello UDP!";
   int number = 0;
+
+  if (naive) {
+    algo = algo == &mpi_bcast_ring_xdp ? &mpi_bcast_ring : mpi_bcast_linear;
+  }
 
   if (strlen(outputname) == 0) {
     strcpy(outputname, "test.csv");
@@ -212,10 +233,13 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
 
-  err = ebpf_loader_attach_by_name(&loader, interface);
-  if (err != 0) {
-    perror("loader attach fail\n");
-    exit(EXIT_FAILURE);
+  if (!naive) {
+
+    err = ebpf_loader_attach_by_name(&loader, interface);
+    if (err != 0) {
+      perror("loader attach fail\n");
+      exit(EXIT_FAILURE);
+    }
   }
 
   int prog_id;
@@ -229,7 +253,7 @@ int main(int argc, char *argv[]) {
 
   prog_id = info.id;
   printf("Loaded BPF program with ID: %d\n", prog_id);
-  printf("Press Enter to continue...");
+  // printf("Press Enter to continue...");
   // getchar();
 
   int adress_to_proc_fd = ebpf_loader_get_map_fd(&loader, "address_to_proc");
@@ -240,6 +264,23 @@ int main(int argc, char *argv[]) {
   EBPF_INFO.address_to_proc = adress_to_proc_fd;
   EBPF_INFO.proc_to_address = proc_to_adress_fd;
   EBPF_INFO.num_process = num_process_fd;
+  EBPF_INFO.xsk_map = -1;
+
+  if (use_xsk) {
+    if (!interface) {
+      fprintf(stderr, "AF_XDP mode requires -i <interface>\n");
+      exit(EXIT_FAILURE);
+    }
+    g_iface = interface;
+    g_xsk_map_fd = ebpf_loader_get_map_fd(&loader, "xsk_map");
+    EBPF_INFO.xsk_map = g_xsk_map_fd;
+    if (g_xsk_map_fd < 0) {
+      fprintf(stderr,
+              "xsk_map not found in BPF object — was mpi_xsk.bpf.o loaded?\n");
+      exit(EXIT_FAILURE);
+    }
+  }
+
   int key = 0;
   if (bpf_map_update_elem(num_process_fd, &key, &WORD_SIZE, BPF_ANY) != 0) {
     perror("fail update map num_process\n");

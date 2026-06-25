@@ -12,21 +12,23 @@ import seaborn as sns
 import pandas as pd
 import numpy as np
 
+
 def set_governor(governor):
-    for core in range(9):
-        path = f"/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor"
-        try:
+    try:
+        for core in range(32):
+    
+            path = f"/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor"
             subprocess.run(
                 ["sudo", "tee", path],
                 input=governor,
                 text=True,
                 stdout=subprocess.DEVNULL,
-                check=True
+                check=True,
             )
-            print(f"Core {core}: {governor} OK")
-        except subprocess.CalledProcessError:
-            print(f"Core {core}: errore")
-
+            # print(f"Core {core}: {governor} OK")
+    
+    except subprocess.CalledProcessError as e:
+        print(f"Error setting governor: {e}")
 
 def _sudo_user_ids():
     """Return (uid, gid) of the user who invoked sudo, or None if not running under sudo."""
@@ -70,10 +72,11 @@ def parse_args():
         "-p",
         "--progs",
         nargs="+",
-        default=["TC", "XDP"],
-        choices=["XDP", "TC"],
+        default=["naive", "TC", "XDP"],
+        choices=["XDP", "TC", "naive"],
         help="Programs to test",
     )
+
     parser.add_argument(
         "-w", "--warmup", type=int, default=5, help="Warmup runs for MPI program"
     )
@@ -99,6 +102,28 @@ def parse_args():
         default=False,
         help="Set RSS indirection table via ethtool before each test, using the current process count as the queue count (ethtool --set-rxfh-indir <iface> equal <np>)",
     )
+    parser.add_argument(
+        "-S",
+        "--steer",
+        action="store_true",
+        default=False,
+        help="Deterministically steer dst-port (base_port + k) to RX queue k via ethtool "
+        "ntuple flow steering, for k in [0, np). This gives an exact port->queue->core "
+        "mapping (unlike --indir, which is hash-based).",
+    )
+    parser.add_argument(
+        "--base-port",
+        type=int,
+        default=5000,
+        help="First destination port used by the ranks; rank k listens on base_port + k "
+        "(used by --steer to build the ntuple rules)",
+    )
+    parser.add_argument(
+        "--steer-proto",
+        default="udp4",
+        choices=["udp4", "tcp4", "udp6", "tcp6"],
+        help="ethtool flow-type used for the ntuple steering rules (default: udp4)",
+    )
     return parser.parse_args()
 
 
@@ -106,6 +131,7 @@ def format_output_suffix(args, timestamp):
     sizes = "-".join(map(str, args.sizes))
     processes = "-".join(map(str, args.processes))
     indir_part = "_x-auto" if args.indir else ""
+    steer_part = f"_steer-{args.base_port}" if args.steer else ""
     return (
         f"s-{sizes}"
         f"_n-{processes}"
@@ -113,6 +139,7 @@ def format_output_suffix(args, timestamp):
         f"_r-{args.runs}"
         f"_a-{args.algorithm}"
         f"{indir_part}"
+        f"{steer_part}"
         f"_{timestamp}"
     )
 
@@ -131,11 +158,85 @@ def format_csv_value(value):
 def set_rxfh_indir(interface, n):
     cmd = ["sudo", "ethtool", "--set-rxfh-indir", interface, "equal", str(n)]
     print(f"Setting RSS indirection table: {' '.join(cmd)}")
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"ethtool failed (exit {result.returncode}): {result.stderr.strip()}"
         )
+
+
+def clear_ntuple_steering(interface, max_loc=64):
+    """Remove leftover ntuple rules (loc 0..max_loc-1) from previous runs.
+
+    Stale rules from a run with a higher process count would otherwise keep
+    steering high ports to queues that may no longer exist, so we always clear
+    before (re)applying.
+    """
+    for loc in range(max_loc):
+        subprocess.run(
+            ["sudo", "ethtool", "-U", interface, "delete", str(loc)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
+def set_ntuple_steering(interface, base_port, n, proto="udp4"):
+    """Deterministically steer dst-port (base_port + k) to RX queue k, for k in [0, n).
+
+    Requires the NIC to expose at least n combined channels and to support ntuple
+    flow steering. Unlike the RSS indirection table, this is an exact, hash-free
+    mapping: port base_port+k always lands on queue k (which should be IRQ-pinned
+    to the core running rank k).
+    """
+    # Ensure at least n RX queues are available. This can legitimately fail
+    # (e.g. value unchanged, or an XDP program is attached), so do not abort on it.
+    subprocess.run(
+        ["sudo", "ethtool", "-L", interface, "combined", str(n)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    # Enable ntuple (flow steering) filtering.
+    enable = subprocess.run(
+        ["sudo", "ethtool", "-K", interface, "ntuple", "on"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if enable.returncode != 0:
+        raise RuntimeError(
+            f"failed to enable ntuple on {interface} "
+            f"(exit {enable.returncode}): {enable.stderr.strip()}"
+        )
+
+    for k in range(n):
+        # loc = k keeps each rule stable and easy to delete later.
+        cmd = [
+            "sudo",
+            "ethtool",
+            "-U",
+            interface,
+            "flow-type",
+            proto,
+            "dst-port",
+            str(base_port + k),
+            "action",
+            str(k),
+            "loc",
+            str(k),
+        ]
+        print(f"Steering: {' '.join(cmd)}")
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ethtool ntuple failed for port {base_port + k} "
+                f"(exit {result.returncode}): {result.stderr.strip()}"
+            )
 
 
 def run_benchmark(interface, size, np, prog, warmup, algo):
@@ -169,6 +270,8 @@ def run_benchmark(interface, size, np, prog, warmup, algo):
     ]
     if prog == "TC":
         mpi_cmd.append("-t")
+    elif prog == "naive":
+        mpi_cmd.append("-z")
 
     try:
         # Capture output of MPI if there is any data of interest
@@ -203,7 +306,9 @@ def run_benchmark(interface, size, np, prog, warmup, algo):
         return []
 
 
-def plot_median_times(csv_content, target_size="1000", output_path=None, algo=None, indir=None):
+def plot_median_times(
+    csv_content, target_size="1000", output_path=None, algo=None, indir=None, steer=None
+):
     """
     Parses a custom CSV string with multiple runs separated by empty lines,
     extracts the median time for each column per run, and plots a grouped
@@ -367,12 +472,17 @@ def plot_median_times(csv_content, target_size="1000", output_path=None, algo=No
         meta_parts.append(f"algorithm: {algo}")
     if indir:
         meta_parts.append("indir: auto (= np)")
+    if steer:
+        meta_parts.append("steer: dst-port -> queue")
     if meta_parts:
         fig.text(
-            0.5, 0.97,
+            0.5,
+            0.97,
             "  |  ".join(meta_parts),
-            ha="center", va="top",
-            fontsize=10, color="gray",
+            ha="center",
+            va="top",
+            fontsize=10,
+            color="gray",
         )
     ax.set_xticks(x_positions)
     ax.set_xticklabels(np_order)
@@ -420,6 +530,13 @@ def main():
         for i, (size, np, prog) in enumerate(combinations):
             if args.indir:
                 set_rxfh_indir(args.interface, np)
+            if args.steer:
+                # Clear stale rules first, then map base_port..base_port+np-1
+                # onto queues 0..np-1 deterministically.
+                clear_ntuple_steering(args.interface)
+                set_ntuple_steering(
+                    args.interface, args.base_port, np, proto=args.steer_proto
+                )
             metrics = run_benchmark(
                 args.interface, size, np, prog, args.warmup, args.algorithm
             )
@@ -427,6 +544,10 @@ def main():
                 current_run_data[i].extend(metrics)
             # time.sleep(0.5) # Small delay between runs
         runs_data.append(current_run_data)
+
+    if args.steer:
+        # Leave the NIC in a clean state once benchmarking is done.
+        clear_ntuple_steering(args.interface)
 
     print(f"\nAll tests completed. Writing results to {results_output}")
 
@@ -496,10 +617,16 @@ def main():
 
     csv_content = open(results_output).read()
     for size in args.sizes:
-        plot_output = os.path.join(output_dir, f"median_times_s{size}_{output_stem}_{output_suffix}.png")
+        plot_output = os.path.join(
+            output_dir, f"median_times_s{size}_{output_stem}_{output_suffix}.png"
+        )
         plot_median_times(
-            csv_content, target_size=str(size), output_path=plot_output,
-            algo=args.algorithm, indir=args.indir,
+            csv_content,
+            target_size=str(size),
+            output_path=plot_output,
+            algo=args.algorithm,
+            indir=args.indir,
+            steer=args.steer,
         )
         print(f"Plot written to {plot_output}")
 

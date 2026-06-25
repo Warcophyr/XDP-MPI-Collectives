@@ -1944,7 +1944,8 @@ int mpi_recv_no_ack(void *buf, int count, MPI_Datatype datatype, int source,
   return count;
 }
 
-int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
+int mpi_recv(void *buf, int count, MPI_Datatype datatype, int root, int source,
+             int tag) {
   int size = datatype_size_in_bytes(count, datatype);
   if (size < 1) {
     return -1;
@@ -2447,7 +2448,6 @@ int mpi_recv(void *buf, int count, MPI_Datatype datatype, int source, int tag) {
       MPI_PROCESS->ids[source][MPI_PROCESS->rank] += 1;
     }
     // printf("MY RANK: %d, source: %d\n", MPI_PROCESS->rank, root);
-    __mpi_send_tcp_lost_packet(MPI_ACK, MPI_PROCESS->rank, root, tag, MPI_SEND);
 
     // double end = GET_TIME();
 
@@ -2573,7 +2573,7 @@ int mpi_bcast(void *buf, int count, MPI_Datatype datatype, int root) {
         //        round);
 
         // Receive the actual MPI data
-        int err = mpi_recv(buf, count, datatype, real_src, tag);
+        int err = mpi_recv(buf, count, datatype, root, real_src, tag);
         if (err < 0) {
           printf("Error receiving from process %d\n", real_src);
           return -1;
@@ -2606,7 +2606,7 @@ int mpi_bcast_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
       sleep(1);
     }
     if (rank == 0) {
-      if (mpi_recv(buf, count, datatype, src, tag) < 0) {
+      if (mpi_recv(buf, count, datatype, root, src, tag) < 0) {
         fprintf(stderr, "Process %d: recv from %d failed\n", rank, src);
         return -1;
       }
@@ -2616,7 +2616,7 @@ int mpi_bcast_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
   }
   if (rank != root && rank != 0) {
     // printf("Process %d receiving from %d\n", rank, prev)
-    if (mpi_recv(buf, count, datatype, src, tag) < 0) {
+    if (mpi_recv(buf, count, datatype, root, src, tag) < 0) {
       fprintf(stderr, "Process %d: recv from %d failed\n", rank, src);
       return -1;
     }
@@ -2632,35 +2632,25 @@ int mpi_bcast_ring(void *buf, int count, MPI_Datatype datatype, int root) {
   int next = (rank + 1) % size;
   int prev = (rank - 1 + size) % size;
   int pred_root = (root - 1 + size) % size;
-
+  
+  // fprintf(stderr, "[coll rank: %d]: Entered naive ring\n", rank);
   // 1) Root kicks off by sending to (root+1)%size
   if (rank == root) {
     // printf("Process %d (root) sending to %d\n", rank, next);
     mpi_send(buf, count, datatype, next, tag);
-  }
-
-  // 2) Everyone except root must receive from their predecessor
-  if (rank != root) {
-    // printf("Process %d receiving from %d\n", rank, prev);
-    if (mpi_recv(buf, count, datatype, prev, tag) < 0) {
+  } else {
+    if (mpi_recv(buf, count, datatype, root, prev, tag) < 0) {
       fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
       return -1;
     }
+    __mpi_send_tcp_lost_packet(MPI_ACK, MPI_PROCESS->rank, prev, tag, MPI_SEND);
   }
 
   // 3) And everyone except the predecessor of root forwards to their “next”
   //  This stops the packet from looping back to root.
-  if (rank != pred_root) {
-    // printf("Process %d forwarding to %d\n", rank, next);
-    if (rank == root) {
-      // root already used mpi_send above;
-      // if you want XDP‐send for everyone, swap these two calls
-    } else {
-      // mpi_send_xdp(buf, count, datatype, next, tag, &recv_info);
-      mpi_send(buf, count, datatype, next, tag);
-    }
+  if (next != root && rank != root) {
+    mpi_send(buf, count, datatype, next, tag);
   }
-
   return 0;
 }
 
@@ -2702,19 +2692,23 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
 
   // fprintf(stderr, "[coll rank: %d]: Entered ring\n", rank);
   // 1) Root kicks off by sending to (root+1)%size
+  
+
   if (rank == root) {
     // printf("Process %d (root) sending to %d\n", rank, next);
     __mpi_send(buf, count, datatype, root, next, tag, MPI_BCAST_RING);
     // usleep(1000);
+    void *message = malloc(MPI_HEADER);
+    if (!message) {
+      perror("malloc failed");
+      return -1;
+    }
+
+
     for (size_t i = 0; i < WORD_SIZE; i++) {
       if (MPI_PROCESS->rank == i)
         continue;
 
-      void *message = malloc(MPI_HEADER);
-      if (!message) {
-        perror("malloc failed");
-        return -1;
-      }
       int root;
       int src;
       int dst;
@@ -2725,7 +2719,9 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
       unsigned long seq;
       unsigned long id;
 
-      // fprintf(stderr, "[coll rank: %d]: Received message\n", rank);
+      memset(message, 0, MPI_HEADER);
+
+      // fprintf(stderr, "[coll rank: %d]: ppiippo Received message\n", rank);
       int err = recv(MPI_PROCESS->socket_tcp_fd[i], message, MPI_HEADER, 0);
       // fprintf(stderr, "[coll rank: %d]: Message received\n", rank);
       if (err == -1) {
@@ -2775,10 +2771,9 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
 
         __mpi_send_tcp(buf, count, datatype, MPI_PROCESS->rank, root, tag,
                        MPI_SEND);
-
-        free(message);
       }
     }
+    free(message);
     // fprintf(stderr, "[coll rank: %d]: Root broadcast sent, continuing\n",
     // rank);
   }
@@ -2787,10 +2782,12 @@ int mpi_bcast_ring_xdp(void *buf, int count, MPI_Datatype datatype, int root) {
   if (rank != root) {
     // printf("Process %d receiving from %d\n", rank, prev);
     // fprintf(stderr, "[coll rank: %d]: waiting for RECV\n", rank);
-    if (mpi_recv(buf, count, datatype, prev, tag) < 0) {
+    if (mpi_recv(buf, count, datatype, root, prev, tag) < 0) {
       fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
       return -1;
     }
+    // fprintf(stderr, "[coll rank: %d]: RECV done\n", rank);
+    __mpi_send_tcp_lost_packet(MPI_ACK, MPI_PROCESS->rank, root, tag, MPI_SEND);
   }
 
   // fprintf(stderr, "[coll rank: %d]: end coll\n", rank);
@@ -2894,13 +2891,39 @@ int mpi_bcast_linear_xdp(void *buf, int count, MPI_Datatype datatype,
   if (rank != root) {
     // printf("Process %d receiving from %d\n", rank, prev);
     // fprintf(stderr, "[coll rank: %d]: waiting for RECV\n", rank);
-    if (mpi_recv(buf, count, datatype, prev, tag) < 0) {
+    if (mpi_recv(buf, count, datatype, root, prev, tag) < 0) {
       fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
       return -1;
     }
+    __mpi_send_tcp_lost_packet(MPI_ACK, MPI_PROCESS->rank, root, tag, MPI_SEND);
   }
 
   // fprintf(stderr, "[coll rank: %d]: end coll\n", rank);
+
+  return 0;
+}
+
+int mpi_bcast_linear(void *buf, int count, MPI_Datatype datatype, int root) {
+  int rank = MPI_PROCESS->rank;
+  int size = WORD_SIZE;
+  int tag = 1; // you can choose any tag
+
+  // Most naive linear broadcast: root sends directly to every process
+  if (rank == root) {
+    // Root sends to every other process sequentially
+    for (int i = 0; i < size; i++) {
+      if (i != root) {
+        mpi_send(buf, count, datatype, i, tag);
+      }
+    }
+  } else {
+    // Non-root processes receive from root
+    if (mpi_recv(buf, count, datatype, root, root, tag) < 0) {
+      fprintf(stderr, "Process %d: recv from root %d failed\n", rank, root);
+      return -1;
+    }
+    __mpi_send_tcp_lost_packet(MPI_ACK, MPI_PROCESS->rank, root, tag, MPI_SEND);
+  }
 
   return 0;
 }
@@ -3800,6 +3823,8 @@ int mpi_reduce_ring(void *buf, int count, MPI_Datatype datatype,
   int tag = 1; // you can choose any tag
   int next = (rank + 1) % size;
   int prev = (rank - 1 + size) % size;
+
+
   // int pred_root = (root - 1 + size) % size;
 
   // 1) Root kicks off by sending to (root+1)%size

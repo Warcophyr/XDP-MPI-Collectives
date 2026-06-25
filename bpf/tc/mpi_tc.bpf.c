@@ -812,7 +812,8 @@ int kfunc(struct __sk_buff *skb) {
 
   // //bpf_printk("TC: Packet from other source, passing through\n");
 
-  return TC_ACT_OK;
+  return TC_ACT_SHOT; // Drop packets from other sources to focus on the target
+                      // traffic
 }
 
 char LICENSE[] SEC("license") = "GPL";

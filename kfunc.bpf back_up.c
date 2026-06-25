@@ -11,16 +11,16 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
-#ifdef DEBUG
-#define bpf_printk(fmt, ...) \
-  ({ \
-    char ____fmt[] = fmt; \
-    bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__); \
-  })
-#else
-#define bpf_printk(fmt, ...) \
-  do { \ } while (0)
-#endif
+// #ifdef DEBUG
+// #define //bpf_printk(fmt, ...) \
+//   ({ \
+//     char ____fmt[] = fmt; \
+//     bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__); \
+//   })
+// #else
+// #define //bpf_printk(fmt, ...) \
+//   do { \ } while (0)
+// #endif
 
 #define __XDP_CLONE_PASS 5
 #define __XDP_CLONE_TX 6
@@ -356,7 +356,6 @@ static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
   } break;
   case MPI_BCAST_RING: {
     if (root_host == dst_host) {
-      bpf_printk("ho finito in clone");
       return XDP_PASS;
     }
     if (ctx->data + sizeof(__u32) <= ctx->data_end) {
@@ -402,7 +401,6 @@ static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
             // //bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
             // //bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
             count_tx++;
-            //bpf_printk("rank: %d,FWD to rank: %d, iter: %d", src_host, next, iter_copy);
             return XDP_TX;
           }
         }
@@ -593,7 +591,6 @@ static __always_inline int handle_original(struct xdp_md *ctx,
   } break;
   case MPI_BCAST_RING: {
     if (root_host == dst_host) {
-      bpf_printk("ho finito in original");
       return XDP_PASS;
     } else {
       // if (src_host == 0 && seq_host == 0) {
@@ -607,7 +604,6 @@ static __always_inline int handle_original(struct xdp_md *ctx,
       // dst_host,
       //            elapsed_sec, elapsed_usec);
       // count_pass++;
-      //bpf_printk("ORIGINAL rank: %d, iter: %d", dst_host, seq_host);
       return XDP_CLONE_PASS(1);
     }
   } break;
@@ -665,7 +661,7 @@ int kfunc(struct xdp_md *ctx) {
     // 192.168.101.1
     //   //bpf_printk("handle clone\n");
   } else {
-    return XDP_DROP;
+    return XDP_PASS;
   }
 }
 

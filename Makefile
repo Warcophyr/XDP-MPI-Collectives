@@ -15,7 +15,7 @@ TARGET := kfunc
 .PHONY : all clean
 
 
-all: MPI kfunc tc uprobe
+all: MPI kfunc tc xsk uprobe
 
 
 # $(KOBJ): xdp_prog_kern.c
@@ -52,8 +52,36 @@ kprobe:
 tc:
 	make -C "bpf/tc" DEBUG=$(DEBUG)
 
+xsk:
+	make -C "bpf/xdp" DEBUG=$(DEBUG)
+
+ETH       ?= enp52s0f1np1
+NRANKS    ?= 8
+BASE_PORT ?= 5000
+
 run:
-	sudo ./MPI -n 8 -i enp52s0f1np1
+	sudo ./MPI -n $(NRANKS) -i $(ETH)
+
+run-xsk: setup-xsk
+	sudo ./MPI -n $(NRANKS) -i $(ETH) -x
+
+# Configure NRANKS NIC queues and add one ntuple rule per rank so that
+# UDP dst-port (BASE_PORT+r) is steered to queue r.  Required before
+# running ./MPI with -x (AF_XDP mode).  Must be re-run after driver reload.
+setup-xsk:
+	sudo ethtool -L $(ETH) combined $(NRANKS)
+	sudo ethtool -K $(ETH) ntuple on
+	sudo ethtool --set-rxfh-indir $(ETH) equal $(NRANKS)
+	for r in $$(seq 0 $$(($(NRANKS)-1))); do \
+		sudo ethtool -N $(ETH) flow-type udp4 \
+			dst-port $$(($(BASE_PORT)+$$r)) action $$r; \
+	done
+	@echo "NIC configured: $(NRANKS) queues, ntuple rules BASE_PORT=$(BASE_PORT)"
+
+teardown-xsk:
+	-sudo ethtool -K $(ETH) ntuple off
+	-sudo ethtool -L $(ETH) combined 1
+	-sudo ethtool --set-rxfh-indir $(ETH) equal 1
 
 clean:
 	rm -f MPI
