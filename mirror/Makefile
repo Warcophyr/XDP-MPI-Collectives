@@ -58,11 +58,12 @@ kprobe:
 tx: ./tx.c
 	$(GCC) $(UFLAGS) $(SRC) $< -o $@ $(LIBS)
 
-tc:
-	make -C "bpf/tc" DEBUG=$(DEBUG)
 
 xdp:
 	make -C "bpf/xdp" DEBUG=$(DEBUG)
+
+tc:
+	make -C "bpf/tc" DEBUG=$(DEBUG)
 
 xsk:
 	make -C "bpf/xsk" DEBUG=$(DEBUG)
@@ -77,7 +78,7 @@ run:
 run-xsk: setup-xsk
 	sudo ./MPI -n $(NRANKS) -i $(ETH) -x
 
-# Configure NRANKS NIC queues and add one ntuple rule per rank so that
+	# Configure NRANKS NIC queues and add one ntuple rule per rank so that
 # UDP dst-port (BASE_PORT+r) is steered to queue r.  Required before
 # running ./MPI with -x (AF_XDP mode).  Must be re-run after driver reload.
 setup-xsk:
@@ -96,9 +97,4 @@ teardown-xsk:
 	-sudo ethtool --set-rxfh-indir $(ETH) equal 1
 
 clean:
-	rm -f MPI
-# 	rm -f $(KOBJ) $(ULOADER)
 	rm -f $(TARGET) $(TARGET:=.bpf.o) $(TARGET:=.bpf.skel.h)
-	rm -f $(MIRROR) $(MIRROR:=.bpf.o) $(MIRROR:=.bpf.skel.h)
-	rm -f uprobe uprobe.bpf.o uprobe.bpf.skel.h
-	rm -f kprobe kprobe.bpf.o kprobe.bpf.skel.h

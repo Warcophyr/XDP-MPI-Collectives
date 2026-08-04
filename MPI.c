@@ -54,8 +54,9 @@ int main(int argc, char *argv[]) {
   char *interface = NULL;
   int use_tc = 0;
   int naive = 0;
-  char *bpf_prog_path = malloc(sizeof(char) * 64);
-  strcpy(bpf_prog_path, "kfunc.bpf.o");
+  char *bpf_prog_path = (char *)malloc(sizeof(char) * 64);
+  // strcpy(bpf_prog_path, "kfunc.bpf.o");
+  strcpy(bpf_prog_path, "bpf/xdp/mpi_xdp.bpf.o");
 
   static struct option long_option[] = {
       {"help", no_argument, 0, 'h'},
@@ -143,7 +144,7 @@ int main(int argc, char *argv[]) {
       break;
     case 'x':
       use_xsk = 1;
-      strcpy(bpf_prog_path, "bpf/xdp/mpi_xsk.bpf.o");
+      strcpy(bpf_prog_path, "bpf/xsk/mpi_xsk.bpf.o");
       if (access(bpf_prog_path, F_OK) != 0) {
         fprintf(stderr, "XSK BPF program not found at %s\n", bpf_prog_path);
         exit(EXIT_FAILURE);
