@@ -9,3 +9,4 @@ kprobe
 out
 *.png
 AGENT.md
+.claude/
