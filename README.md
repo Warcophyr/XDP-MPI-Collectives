@@ -1,13 +1,13 @@
 # XDP-MPI-Collectives
 
-This project implements a small MPI-like broadcast benchmark that uses eBPF/XDP to accelerate collective communication. The main application starts several ranks as forked processes, loads a BPF program on a network interface, and runs a broadcast test using either the XDP or TC path.
+This project implements a small MPI-like broadcast benchmark that uses eBPF/XDP to accelerate collective communication. The main application starts several ranks as forked processes, loads a BPF program on a network interface, and runs a broadcast test using either XDP or TC paths.
 
 ## What each file is for
 
 - MPI.c: entry point of the program. It parses command-line options, loads the BPF object, attaches it to the interface, populates the BPF maps, and forks the worker ranks.
 - mpi_collective.c: contains the collective communication logic, including ring and linear broadcast implementations and the ACK/NACK fallback path.
 - my_ebpf.c / my_ebpf.h: helper code for loading and attaching BPF programs and retrieving map file descriptors.
-- bpf/xdp and bpf/tc: BPF programs for the supported execution modes.
+- bpf/xdp, bpf/tc: BPF programs for the supported execution modes.
 
 ## Requirements
 

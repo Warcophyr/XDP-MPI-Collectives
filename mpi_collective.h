@@ -30,7 +30,6 @@
 
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
-#include <xdp/xsk.h>
 #include <linux/if_link.h>
 #include "mpi_global_variable.h"
 #include "mpi_struct.h"
@@ -56,7 +55,8 @@ int datatype_size_in_bytes(int count, MPI_Datatype datatype);
 void print_mpi_message(void *buf, int length, MPI_Datatype datatype);
 int mpi_send(const void *buf, int count, MPI_Datatype datatype, int dest,
              int tag);
-int mpi_recv(void *buf, int count, MPI_Datatype datatype, int root, int source, int tag);
+int mpi_recv(void *buf, int count, MPI_Datatype datatype, int root, int source,
+             int tag);
 
 int mpi_barrier(void);
 

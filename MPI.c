@@ -41,8 +41,6 @@ void help() {
          "program (default: lo)\n");
   printf("  -w, --warmup ITER     Set the number of warmup iterations before "
          "measurement (default: 0)\n");
-  printf("  -x, --xsk             Use AF_XDP zero-copy receive instead of UDP "
-         "sockets (requires one NIC queue per rank)\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -69,10 +67,9 @@ int main(int argc, char *argv[]) {
       {"np", required_argument, 0, 'n'},
       {"interface", optional_argument, 0, 'i'},
       {"warmup", required_argument, 0, 'w'},
-      {"xsk", no_argument, 0, 'x'},
       {0, 0, 0, 0}};
 
-  while ((option = getopt_long(argc, argv, "ho:v:n:i:ts:w:a:x:z", long_option,
+  while ((option = getopt_long(argc, argv, "ho:v:n:i:ts:w:a:z", long_option,
                                &option_index)) != -1) {
     switch (option) {
     case 'h':
@@ -141,15 +138,6 @@ int main(int argc, char *argv[]) {
     case 'w':
       warmup_iterations = atoi(optarg);
       printf("Warmup iterations: %d\n", warmup_iterations);
-      break;
-    case 'x':
-      use_xsk = 1;
-      strcpy(bpf_prog_path, "bpf/xsk/mpi_xsk.bpf.o");
-      if (access(bpf_prog_path, F_OK) != 0) {
-        fprintf(stderr, "XSK BPF program not found at %s\n", bpf_prog_path);
-        exit(EXIT_FAILURE);
-      }
-      printf("AF_XDP (XSK) option selected\n");
       break;
     case 'z':
       naive = 1;
@@ -265,21 +253,9 @@ int main(int argc, char *argv[]) {
   EBPF_INFO.address_to_proc = adress_to_proc_fd;
   EBPF_INFO.proc_to_address = proc_to_adress_fd;
   EBPF_INFO.num_process = num_process_fd;
-  EBPF_INFO.xsk_map = -1;
 
-  if (use_xsk) {
-    if (!interface) {
-      fprintf(stderr, "AF_XDP mode requires -i <interface>\n");
-      exit(EXIT_FAILURE);
-    }
+  if (interface) {
     g_iface = interface;
-    g_xsk_map_fd = ebpf_loader_get_map_fd(&loader, "xsk_map");
-    EBPF_INFO.xsk_map = g_xsk_map_fd;
-    if (g_xsk_map_fd < 0) {
-      fprintf(stderr,
-              "xsk_map not found in BPF object — was mpi_xsk.bpf.o loaded?\n");
-      exit(EXIT_FAILURE);
-    }
   }
 
   int key = 0;
