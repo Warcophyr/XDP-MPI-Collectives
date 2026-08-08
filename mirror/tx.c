@@ -1,5 +1,5 @@
-#include "mpi_global_variable.h"
-#include "my_ebpf.h"
+#include "../mpi_global_variable.h"
+#include "../my_ebpf.h"
 #include <alloca.h>
 #include <arpa/inet.h>
 #include <errno.h>
