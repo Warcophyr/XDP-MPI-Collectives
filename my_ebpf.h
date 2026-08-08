@@ -20,7 +20,6 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
-#include <xdp/xsk.h>
 // #include "my_ebpf.c"
 
 // Initialize the loader

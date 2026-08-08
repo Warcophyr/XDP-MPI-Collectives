@@ -2,7 +2,6 @@
 // #include "Wtime.h"
 #include "mpi_struct.h"
 #include <stdlib.h>
-#include <xdp/xsk.h>
 
 #define MPI_ANY_SOURCE -2
 #define MPI_ANY_TAG -1
@@ -27,6 +26,4 @@
 EBPF_info EBPF_INFO = {0};
 struct ebpf_loader loader = {0};
 double TTOTAL = 0;
-int use_xsk = 0;
 char *g_iface = NULL;
-int g_xsk_map_fd = -1;

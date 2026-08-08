@@ -1,13 +1,13 @@
 # XDP-MPI-Collectives
 
-This project implements a small MPI-like broadcast benchmark that uses eBPF/XDP to accelerate collective communication. The main application starts several ranks as forked processes, loads a BPF program on a network interface, and runs a broadcast test using either XDP, TC, or AF_XDP paths.
+This project implements a small MPI-like broadcast benchmark that uses eBPF/XDP to accelerate collective communication. The main application starts several ranks as forked processes, loads a BPF program on a network interface, and runs a broadcast test using either XDP or TC paths.
 
 ## What each file is for
 
 - MPI.c: entry point of the program. It parses command-line options, loads the BPF object, attaches it to the interface, populates the BPF maps, and forks the worker ranks.
 - mpi_collective.c: contains the collective communication logic, including ring and linear broadcast implementations and the ACK/NACK fallback path.
 - my_ebpf.c / my_ebpf.h: helper code for loading and attaching BPF programs and retrieving map file descriptors.
-- bpf/xdp, bpf/tc, bpf/xsk: BPF programs for different execution modes.
+- bpf/xdp, bpf/tc: BPF programs for the supported execution modes.
 
 ## Requirements
 
@@ -48,7 +48,6 @@ This uses the default XDP-based ring broadcast algorithm.
 - -o, --output: output CSV file for timing results
 - -w, --warmup: number of warmup iterations before measurement
 - -t, --tc: use the TC BPF program instead of XDP
-- -x, --xsk: use AF_XDP zero-copy receive mode
 - -z, --naive: disable the BPF path and use a naive userspace fallback
 - -h, --help: show the help message
 
@@ -64,23 +63,6 @@ Run the same test with TC mode:
 
 ```bash
 sudo ./MPI -n 8 -a linear -s 4096 -i enp52s0f1np1 -t -o results.csv
-```
-
-Run AF_XDP mode (requires one NIC queue per rank):
-
-```bash
-make setup-xsk
-sudo ./MPI -n 8 -i enp52s0f1np1 -x
-```
-
-## AF_XDP setup helper
-
-The Makefile includes helpers to configure NIC queues and ntuple rules for AF_XDP mode:
-
-```bash
-make setup-xsk
-make run-xsk
-make teardown-xsk
 ```
 
 ## Helpful debugging commands

@@ -5,7 +5,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <linux/if_link.h>
-#include <xdp/xsk.h>
 
 typedef struct Array {
   void *arr;
@@ -128,5 +127,4 @@ typedef struct EBPF_info {
   int address_to_proc;
   int proc_to_address;
   int num_process;
-  int xsk_map;
 } EBPF_info;
