@@ -2,7 +2,6 @@ results_*
 *.o
 *.bpf.o
 *.skel.h
-vmlinux.h
 __pycache__
 kfunc
 kprobe
@@ -11,3 +10,4 @@ out
 AGENT.md
 backup/
 .claude/
+MPI

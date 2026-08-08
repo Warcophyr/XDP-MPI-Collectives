@@ -5,13 +5,6 @@ UFLAGS       := -O3 -Wall
 GDB          := -g -fsanitize=address -fno-omit-frame-pointer
 LIBS         := -lbpf -lelf -lz -lxdp -lm
 SRC		  := my_ebpf.c
-# KOBJ         := xdp_prog_kern.o
-# KMAP         := xdp_map_mpi.o
-# ULOADER      := xdp_loader
-# MPI     	 := MPI
-# KERNELMODULE := kernel_module_xdp.ko
-# TARGET := kfunc
-MIRROR := mirror
 
 .PHONY : all clean
 
@@ -20,41 +13,22 @@ MIRROR := mirror
 all: MPI tc xdp xsk mirror tx uprobe kprobe
 
 
-# $(KOBJ): xdp_prog_kern.c
-# 	$(CLANG) $(KFLAGS) -c $< -o $@ -I ../XDP-MPI-Collectives/kernel_module
-
-# $(KMAP): xdp_map_mpi.c
-# 	$(CLANG) $(KFLAGS) -c $< -o $@
-
-# $(ULOADER): xdp_loader.c $(KOBJ)
-# 	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
-
-# $(MPI): MPI.c 
-# 	$(GCC) $(UFLAGS) $< -o $@ $(LIBS)
-
 MPI: ./MPI.c
 # 	$(GCC) $(UFLAGS) $(GDB) $(SRC) $< -o $@ $(LIBS)
 	$(GCC) $(UFLAGS) $(SRC) $< -o $@ $(LIBS)
 
-# kfunc: 
-# 	clang -g -O2 --target=bpf -c $(TARGET).bpf.c -o $(TARGET).bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
-# 	bpftool gen skeleton $(TARGET).bpf.o > $(TARGET).bpf.skel.h
-# 	gcc -g -O2 -o $(TARGET) $(TARGET).c -lbpf
 
 mirror:
 	make -C "mirror" mirror
 
 tx: 
 	make -C "mirror" tx
+
 uprobe:
-	clang -g -O2 --target=bpf -D__TARGET_ARCH_x86 -c profiling/uprobe.bpf.c -o profiling/uprobe.bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
-	bpftool gen skeleton profiling/uprobe.bpf.o > profiling/uprobe.bpf.skel.h
-	gcc -g -O2 -I profiling -o profiling/uprobe profiling/uprobe.c -lbpf
+	make -C "profiling" uprobe
 
 kprobe:
-	clang -g -O2 --target=bpf -D__TARGET_ARCH_x86 -c profiling/kprobe.bpf.c -o kprobe.bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
-	bpftool gen skeleton kprobe.bpf.o > kprobe.bpf.skel.h
-	gcc -g -O2 -o kprobe profiling/kprobe.c -lbpf -lelf -lz
+	make -C "profiling" kprobe
 
 
 tc:
@@ -99,9 +73,5 @@ clean:
 	make -C "mirror" clean
 	make -C "bpf/tc" clean
 	make -C "bpf/xdp" clean
-	make -C "bpf/xsk" clean	
-# 	rm -f $(KOBJ) $(ULOADER)
-# 	rm -f $(TARGET) $(TARGET:=.bpf.o) $(TARGET:=.bpf.skel.h)
-# 	rm -f $(MIRROR) $(MIRROR:=.bpf.o) $(MIRROR:=.bpf.skel.h)
-# 	rm -f uprobe uprobe.bpf.o uprobe.bpf.skel.h
-# 	rm -f kprobe kprobe.bpf.o kprobe.bpf.skel.h
+	make -C "bpf/xsk" clean
+	make -C "profiling" clean	

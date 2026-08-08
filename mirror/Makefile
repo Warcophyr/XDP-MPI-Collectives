@@ -19,4 +19,5 @@ tx: ./tx.c
 	$(GCC) $(UFLAGS) $(SRC) $< -o $@ $(LIBS)
 
 clean:
+	rm -f tx
 	rm -f $(TARGET) $(TARGET:=.bpf.o) $(TARGET:=.bpf.skel.h)
