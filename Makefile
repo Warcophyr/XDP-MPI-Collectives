@@ -10,13 +10,14 @@ SRC		  := my_ebpf.c
 # ULOADER      := xdp_loader
 # MPI     	 := MPI
 # KERNELMODULE := kernel_module_xdp.ko
-TARGET := kfunc
+# TARGET := kfunc
 MIRROR := mirror
 
 .PHONY : all clean
 
 
-all: MPI kfunc tc xdp xsk uprobe
+# all: MPI kfunc tc xdp xsk uprobe
+all: MPI tc xdp xsk mirror tx uprobe kprobe
 
 
 # $(KOBJ): xdp_prog_kern.c
@@ -35,16 +36,16 @@ MPI: ./MPI.c
 # 	$(GCC) $(UFLAGS) $(GDB) $(SRC) $< -o $@ $(LIBS)
 	$(GCC) $(UFLAGS) $(SRC) $< -o $@ $(LIBS)
 
-kfunc: 
-	clang -g -O2 --target=bpf -c $(TARGET).bpf.c -o $(TARGET).bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
-	bpftool gen skeleton $(TARGET).bpf.o > $(TARGET).bpf.skel.h
-	gcc -g -O2 -o $(TARGET) $(TARGET).c -lbpf
+# kfunc: 
+# 	clang -g -O2 --target=bpf -c $(TARGET).bpf.c -o $(TARGET).bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
+# 	bpftool gen skeleton $(TARGET).bpf.o > $(TARGET).bpf.skel.h
+# 	gcc -g -O2 -o $(TARGET) $(TARGET).c -lbpf
 
-mirror: 
-		clang -g -O2 --target=bpf -c mirror/$(MIRROR).bpf.c -o $(MIRROR).bpf.o -I ./kernel_module
-		bpftool gen skeleton $(MIRROR).bpf.o > $(MIRROR).bpf.skel.h
-		gcc -g -O2 -o $(MIRROR) mirror/$(MIRROR).c -lbpf
+mirror:
+	make -C "mirror" mirror
 
+tx: 
+	make -C "mirror" tx
 uprobe:
 	clang -g -O2 --target=bpf -D__TARGET_ARCH_x86 -c profiling/uprobe.bpf.c -o profiling/uprobe.bpf.o -I ./kernel_module -DDEBUG=$(DEBUG)
 	bpftool gen skeleton profiling/uprobe.bpf.o > profiling/uprobe.bpf.skel.h
@@ -55,8 +56,6 @@ kprobe:
 	bpftool gen skeleton kprobe.bpf.o > kprobe.bpf.skel.h
 	gcc -g -O2 -o kprobe profiling/kprobe.c -lbpf -lelf -lz
 
-tx: ./tx.c
-	$(GCC) $(UFLAGS) $(SRC) $< -o $@ $(LIBS)
 
 tc:
 	make -C "bpf/tc" DEBUG=$(DEBUG)
@@ -97,8 +96,12 @@ teardown-xsk:
 
 clean:
 	rm -f MPI
+	make -C "mirror" clean
+	make -C "bpf/tc" clean
+	make -C "bpf/xdp" clean
+	make -C "bpf/xsk" clean	
 # 	rm -f $(KOBJ) $(ULOADER)
-	rm -f $(TARGET) $(TARGET:=.bpf.o) $(TARGET:=.bpf.skel.h)
-	rm -f $(MIRROR) $(MIRROR:=.bpf.o) $(MIRROR:=.bpf.skel.h)
-	rm -f uprobe uprobe.bpf.o uprobe.bpf.skel.h
-	rm -f kprobe kprobe.bpf.o kprobe.bpf.skel.h
+# 	rm -f $(TARGET) $(TARGET:=.bpf.o) $(TARGET:=.bpf.skel.h)
+# 	rm -f $(MIRROR) $(MIRROR:=.bpf.o) $(MIRROR:=.bpf.skel.h)
+# 	rm -f uprobe uprobe.bpf.o uprobe.bpf.skel.h
+# 	rm -f kprobe kprobe.bpf.o kprobe.bpf.skel.h
