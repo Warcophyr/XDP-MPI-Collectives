@@ -141,10 +141,13 @@ int mirror(struct xdp_md *ctx) {
     return XDP_PASS;
   }
 
-  // Only process UDP packets
+  /* Only process UDP packets. This used to XDP_TX them, which bounced every
+   * non-UDP packet arriving on this interface -- all TCP included -- straight
+   * back out instead of letting it up the stack. On a machine whose control
+   * plane shares the link, that severs it.
+   */
   if (iph->protocol != IPPROTO_UDP) {
-    bpf_printk("XDP: UDP proto noonononono");
-    return XDP_TX;
+    return XDP_PASS;
   }
 
   __u32 ip_hdr_len = iph->ihl * 4;
@@ -177,9 +180,12 @@ int mirror(struct xdp_md *ctx) {
                        sizeof(char));
     }
 
-    // bpf_printk("udp first4: %c %c %c %c\n", mpi_header[0], mpi_header[1],
-    //            mpi_header[2], mpi_header[3]);
-    if (mpi_header[0] != 'M' && mpi_header[1] != 'P' && mpi_header[2] != 'I' &&
+    /* Mirror only what is actually an MPI packet: the magic has to match in
+     * full. With && this passed a packet only when *all four* bytes differed
+     * from "MPI\0", so anything whose fourth byte happened to be 0 -- every
+     * WireGuard data packet, for one -- fell through and got mirrored.
+     */
+    if (mpi_header[0] != 'M' || mpi_header[1] != 'P' || mpi_header[2] != 'I' ||
         mpi_header[3] != '\0') {
       return XDP_PASS;
     }

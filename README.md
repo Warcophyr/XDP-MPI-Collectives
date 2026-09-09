@@ -153,10 +153,19 @@ skipped with a note, since they cannot exist.
 
 The ranks all send to `GRECALE_IP` (192.168.101.2) and every copy has to come
 back, so grecale runs `mirror`: an XDP program that swaps the MACs and the IP
-addresses of anything arriving from 192.168.101.1 and returns it with `XDP_TX`,
-leaving the UDP ports — which is what steers each copy to its rank — alone. It
-is unchanged by all this: an inline-header frame reaches the wire like any
-other.
+addresses of the MPI packets arriving from 192.168.101.1 and returns them with
+`XDP_TX`, leaving the UDP ports — which is what steers each copy to its rank —
+alone.
+
+An inline-header frame reaches the wire like any other, so `mirror` needs
+nothing added for it — but it did need two things fixed, because as written it
+was hostile to everything else on the link. It `XDP_TX`'d every *non*-UDP
+packet arriving on the interface, all TCP included, instead of passing it up;
+and its MPI magic check used `&&`, so a packet was passed only when all four
+bytes differed from `"MPI\0"` — anything whose fourth byte happened to be 0,
+every WireGuard data packet for one, fell through and got mirrored. Between
+them they cut the control plane of a machine that shares the link the moment
+`mirror` is attached. They are now `XDP_PASS` and `||`.
 
 ```bash
 # on grecale
@@ -167,3 +176,11 @@ sudo ./mirror enp172s0f0np0
 
 (`BPFTOOL` only because Ubuntu's `/usr/sbin/bpftool` wrapper refuses to run
 when there is no `linux-tools` package for the running kernel.)
+
+The interface also has to be at an MTU a single-buffer XDP program is allowed
+on: mlx5 refuses to attach above 3498, so grecale's 9000 has to come down.
+1500 matches maestrale and covers `MAX_PAYLOAD` (1472).
+
+```bash
+sudo ip link set enp172s0f0np0 mtu 1500     # 9000 to put it back
+```
