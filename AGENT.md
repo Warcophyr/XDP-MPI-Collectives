@@ -305,6 +305,27 @@ make reload    # loads driver + sets ethtool flags for XDP clone path
 
 ---
 
+## Inline TX header — `bpf/xdp/mpi_xdp_inline.bpf.o`
+
+`bpf/xdp/mpi_xdp.bpf.c` compiles twice. With `-DAXDP_INLINE` the per-copy
+header rewrite in `forward_copy()` is not done to the packet at all: the 58
+bytes (eth + IP + UDP + the MPI header's magic/root/src/dst) are built in the
+copy's metadata, stamped with the A-XDP TX descriptor from `axdp_tx.h`, and
+handed to the NIC as the WQE inline header with `AXDP_TX_REPLACE`, which takes
+the packet's first 58 bytes out of the DMA. The driver side is
+`mellanox-clone-xdp/.../mlx5/core/en/xdp.c` (`mlx5e_xdp_read_tx_desc()`).
+
+`handle_original` is identical in both builds — it still returns
+`XDP_CLONE_PASS(n)`, so the original still goes up to the local rank's socket
+and the copies are still allocated and memcpy'd by the driver. The driver's
+shared-page clone mode, which emits every copy out of the original's page with
+no allocation and no memcpy, is currently gated on `XDP_CLONE_TX`; extending it
+to `XDP_CLONE_PASS` would remove the per-copy memcpy here too, and nothing in
+this program would have to change for it.
+
+`-a inline-<algo>` in `MPI.c` selects the object; `run_tests.py` takes the
+inline and the plain names together and runs both datapaths in one suite.
+
 ## Constraints and Known Limitations
 
 - **Source IP filter** — `kfunc` only processes packets with `saddr == 192.168.101.2` (GRECALE_IP); packets from any other source are `XDP_PASS`'d without inspection.

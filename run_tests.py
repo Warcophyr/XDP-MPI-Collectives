@@ -1,5 +1,7 @@
 import argparse
+import glob
 import itertools
+import re
 import subprocess
 import datetime
 import time
@@ -13,11 +15,28 @@ import pandas as pd
 import numpy as np
 
 
+BASE_ALGORITHMS = ["ring", "linear", "ring_eager"]
+# "inline-<algo>": same collective, same wire format, but each copy's header is
+# written by the NIC as a WQE inline header instead of by the BPF program.
+ALGORITHMS = BASE_ALGORITHMS + [f"inline-{a}" for a in BASE_ALGORITHMS]
+
+# Where MPI lives: next to this script, whatever the working directory is.
+MPI_BINARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MPI")
+
+# Column labels are parsed back out when plotting, and ring_eager has an
+# underscore of its own, so split on the keys rather than on "_".
+COLUMN_RE = re.compile(r"^s=(?P<s>[^_]+)_np=(?P<np>[^_]+)_p=(?P<p>[^_]+)_a=(?P<a>.+)$")
+
+
+def column_label(size, np, prog, algo):
+    return f"s={size}_np={np}_p={prog}_a={algo}"
+
+
 def set_governor(governor):
     try:
-        for core in range(32):
-    
-            path = f"/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor"
+        for path in sorted(
+            glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor")
+        ):
             subprocess.run(
                 ["sudo", "tee", path],
                 input=governor,
@@ -90,9 +109,15 @@ def parse_args():
     parser.add_argument(
         "-a",
         "--algorithm",
-        default="ring",
-        choices=["ring", "linear", "ring_eager"],
-        help="MPI algorithm to use",
+        nargs="+",
+        default=["ring"],
+        choices=ALGORITHMS,
+        help="MPI algorithms to test. Several may be given, and every one is "
+        "run against every -p/-n/-s combination in the same suite: "
+        "-a linear inline-linear ring inline-ring measures all four datapaths "
+        "back to back, under the same machine state, in one go. An "
+        "inline-<algo> runs <algo> with the BPF program that has the NIC "
+        "write each copy's header (XDP only).",
     )
     parser.add_argument("-o", "--output", default="test.csv", help="Output CSV file")
     parser.add_argument(
@@ -130,6 +155,7 @@ def parse_args():
 def format_output_suffix(args, timestamp):
     sizes = "-".join(map(str, args.sizes))
     processes = "-".join(map(str, args.processes))
+    algorithms = "-".join(args.algorithm)
     indir_part = "_x-auto" if args.indir else ""
     steer_part = f"_steer-{args.base_port}" if args.steer else ""
     return (
@@ -137,7 +163,7 @@ def format_output_suffix(args, timestamp):
         f"_n-{processes}"
         f"_w-{args.warmup}"
         f"_r-{args.runs}"
-        f"_a-{args.algorithm}"
+        f"_a-{algorithms}"
         f"{indir_part}"
         f"{steer_part}"
         f"_{timestamp}"
@@ -254,7 +280,7 @@ def run_benchmark(interface, size, np, prog, warmup, algo):
 
     mpi_cmd = [
         "sudo",
-        "/mnt/shared_p2p/XDP_CLONE/XDP-MPI-Collectives/MPI",
+        MPI_BINARY,
         "-w",
         str(warmup),
         "-i",
@@ -359,16 +385,20 @@ def plot_median_times(
             if pd.isna(median_val):
                 continue
 
-            # Parse the column header (e.g., "s=1000_np=2_p=TC")
-            parts = dict(part.split("=") for part in col.split("_"))
+            # Parse the column header (e.g. "s=1000_np=2_p=XDP_a=inline-ring")
+            match = COLUMN_RE.match(col)
+            if not match:
+                continue
+            parts = match.groupdict()
 
             # Filter by the target size
-            if parts.get("s") == str(target_size):
+            if parts["s"] == str(target_size):
                 plot_records.append(
                     {
                         "Run": run_idx + 1,
-                        "NP": int(parts.get("np", 0)),
-                        "Prog": parts.get("p"),
+                        "NP": int(parts["np"]),
+                        "Prog": parts["p"],
+                        "Algo": parts["a"],
                         "MedianTime": median_val,
                     }
                 )
@@ -378,6 +408,11 @@ def plot_median_times(
     if df.empty:
         print(f"No data available for size {target_size}.")
         return
+
+    # One bar group per datapath. With a single algorithm the label stays the
+    # bare program name, so single-algorithm plots look exactly as before.
+    if df["Algo"].nunique() > 1:
+        df["Prog"] = df["Prog"] + "/" + df["Algo"]
 
     # Plotting setup
     fig, ax = plt.subplots(figsize=(12, 7))
@@ -391,7 +426,7 @@ def plot_median_times(
     print(f"Debug: DataFrame:\n{df}")
 
     # Calculate positions for bars and dots
-    bar_width = 0.35
+    bar_width = 0.8 / max(len(prog_order), 1)
     x_positions = np.arange(len(np_order))
 
     # Draw median bars for each program
@@ -439,7 +474,7 @@ def plot_median_times(
             num_data_points = len(np_prog_data)
             if num_data_points > 0:
                 # Jitter amount for better visibility
-                jitter_amount = 0.12
+                jitter_amount = bar_width * 0.3
 
                 # Create jitter positions centered around the bar
                 if num_data_points == 1:
@@ -468,8 +503,9 @@ def plot_median_times(
         fontweight="bold",
     )
     meta_parts = []
-    if algo is not None:
-        meta_parts.append(f"algorithm: {algo}")
+    if algo:
+        algos = algo if isinstance(algo, str) else ", ".join(algo)
+        meta_parts.append(f"algorithm: {algos}")
     if indir:
         meta_parts.append("indir: auto (= np)")
     if steer:
@@ -511,15 +547,34 @@ def main():
     results_output = os.path.join(output_dir, f"{output_stem}_{output_suffix}.csv")
     stats_output = os.path.join(output_dir, f"stats_{output_stem}_{output_suffix}.csv")
 
+    # Every algorithm against every program/np/size, in one suite. An
+    # inline-<algo> only exists on the XDP path, so those pairs are dropped
+    # rather than left to fail in MPI.
     combinations = [
-        (size, np, prog)
+        (size, np, prog, algo)
         for prog in args.progs
+        for algo in args.algorithm
         for np in args.processes
         for size in args.sizes
+        if prog == "XDP" or not algo.startswith("inline-")
     ]
+    if not combinations:
+        raise SystemExit(
+            "nothing to run: inline-* algorithms need -p XDP"
+        )
+    dropped = sorted(
+        {
+            (prog, algo)
+            for prog in args.progs
+            for algo in args.algorithm
+            if prog != "XDP" and algo.startswith("inline-")
+        }
+    )
+    for prog, algo in dropped:
+        print(f"Skipping {algo} on {prog}: the inline TX header is XDP-only")
 
     # Generate CSV Headers: Each parameter combination gets its own column
-    headers = [f"s={s}_np={np}_p={prog}" for s, np, prog in combinations]
+    headers = [column_label(s, np, prog, algo) for s, np, prog, algo in combinations]
 
     # We will accumulate all results structured by run
     runs_data = []
@@ -527,7 +582,7 @@ def main():
     for run in range(args.runs):
         print(f"\n--- Starting benchmark run {run + 1}/{args.runs} ---")
         current_run_data = [[] for _ in combinations]
-        for i, (size, np, prog) in enumerate(combinations):
+        for i, (size, np, prog, algo) in enumerate(combinations):
             if args.indir:
                 set_rxfh_indir(args.interface, np)
             if args.steer:
@@ -538,7 +593,7 @@ def main():
                     args.interface, args.base_port, np, proto=args.steer_proto
                 )
             metrics = run_benchmark(
-                args.interface, size, np, prog, args.warmup, args.algorithm
+                args.interface, size, np, prog, args.warmup, algo
             )
             if metrics:
                 current_run_data[i].extend(metrics)

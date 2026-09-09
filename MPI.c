@@ -31,8 +31,11 @@ void help() {
   printf("  -o, --output FILE     Specify output file for results (default: "
          "test.csv)\n");
   printf("  -t, --tc              Use TC BPF program instead of XDP\n");
-  printf("  -a, --algo ALGO       Choose algorithm (ring, linear, ring_eager) "
-         "(default: ring)\n");
+  printf("  -a, --algo ALGO       Choose algorithm (ring, linear, ring_eager, "
+         "or inline-<algo> to have\n"
+         "                        the NIC write each copy's header instead of "
+         "the BPF program)\n"
+         "                        (default: ring)\n");
   printf("  -s, --size SIZE       Set the size of the data to broadcast "
          "(default: 1000)\n");
   printf("  -v, --version         Show version information and exit\n");
@@ -52,6 +55,7 @@ int main(int argc, char *argv[]) {
   char *interface = NULL;
   int use_tc = 0;
   int naive = 0;
+  int use_inline = 0;
   char *bpf_prog_path = (char *)malloc(sizeof(char) * 64);
   // strcpy(bpf_prog_path, "kfunc.bpf.o");
   strcpy(bpf_prog_path, "bpf/xdp/mpi_xdp.bpf.o");
@@ -122,19 +126,30 @@ int main(int argc, char *argv[]) {
         interface[2] = '\0';
       }
     } break;
-    case 'a':
+    case 'a': {
+      const char *name = optarg;
+
       printf("Algorithm option selected: %s\n", optarg);
-      if (strcmp(optarg, "ring") == 0) {
+      /* "inline-<algo>" runs the same algorithm with the BPF program that has
+       * the NIC write each copy's header, instead of the program rewriting the
+       * packet. Same collective, same wire format: only the datapath differs,
+       * which is the point of being able to ask for both in one benchmark.
+       */
+      if (strncmp(name, "inline-", 7) == 0) {
+        use_inline = 1;
+        name += 7;
+      }
+      if (strcmp(name, "ring") == 0) {
         algo = &mpi_bcast_ring_xdp;
-      } else if (strcmp(optarg, "linear") == 0) {
+      } else if (strcmp(name, "linear") == 0) {
         algo = &mpi_bcast_linear_xdp;
-      } else if (strcmp(optarg, "ring_eager") == 0) {
+      } else if (strcmp(name, "ring_eager") == 0) {
         algo = &mpi_bcast_ring_xdp_eager;
       } else {
         fprintf(stderr, "Unknown algorithm: %s\n", optarg);
         exit(EXIT_FAILURE);
       }
-      break;
+    } break;
     case 'w':
       warmup_iterations = atoi(optarg);
       printf("Warmup iterations: %d\n", warmup_iterations);
@@ -155,6 +170,22 @@ int main(int argc, char *argv[]) {
   socklen_t len = sizeof(cliaddr);
   //   const char *msg = "Hello UDP!";
   int number = 0;
+
+  if (use_inline) {
+    /* The inline header is a TX offload of the XDP SQ: there is no such thing
+     * on the TC path, and nothing at all to offload without a BPF program.
+     */
+    if (use_tc || naive) {
+      fprintf(stderr, "inline-* algorithms are XDP-only (not with -t or -z)\n");
+      exit(EXIT_FAILURE);
+    }
+    strcpy(bpf_prog_path, "bpf/xdp/mpi_xdp_inline.bpf.o");
+    if (access(bpf_prog_path, F_OK) != 0) {
+      fprintf(stderr, "inline BPF program not found at %s\n", bpf_prog_path);
+      exit(EXIT_FAILURE);
+    }
+    printf("Inline TX header selected: %s\n", bpf_prog_path);
+  }
 
   if (naive) {
     algo = algo == &mpi_bcast_ring_xdp ? &mpi_bcast_ring : mpi_bcast_linear;

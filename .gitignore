@@ -9,4 +9,5 @@ kprobe
 out
 *.png
 AGENT.md
-.claude/
+.claude/MPI
+temp_benchmark_output.csv

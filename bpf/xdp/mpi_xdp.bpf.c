@@ -11,6 +11,10 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
+#ifdef AXDP_INLINE
+#include "axdp_tx.h"
+#endif
+
 #ifdef DEBUG
 #define bpf_printk(fmt, ...) \
   ({ \
@@ -116,6 +120,134 @@ static __always_inline __u16 ip_checksum_xdp(struct iphdr *ip) {
 
   return bpf_htons(~sum);
 }
+
+/* How a copy is steered to its next hop.
+ *
+ * A hop rewrites the same 58 bytes at the front of the frame either way: the
+ * two MACs, the next hop's 5-tuple in the IP and UDP headers, and the src/dst
+ * ranks in the MPI header -- which is why it reaches 58 and not 42, those two
+ * fields sitting at offsets 50 and 54. What differs is who writes them.
+ */
+#define AXDP_MPI_FIELDS 16 /* magic + root + src + dst */
+
+#ifndef AXDP_INLINE
+
+/* In software, in place, as XDP has always done it. */
+static __always_inline int forward_copy(struct xdp_md *ctx, struct ethhdr *eth,
+                                        struct iphdr *iph,
+                                        struct udphdr *udph, void *payload,
+                                        int from, int to,
+                                        const socket_id *info) {
+  void *src_payload = (char *)payload + (sizeof(char) * 4) + sizeof(int);
+  void *dst_payload = (char *)payload + (sizeof(char) * 4) + (sizeof(int) * 2);
+  int from_net = bpf_htonl(from);
+  int to_net = bpf_htonl(to);
+  __u8 src_mac[ETH_ALEN];
+  __u8 dst_mac[ETH_ALEN];
+
+  __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
+  __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
+  __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
+  __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
+
+  __builtin_memcpy(src_payload, &from_net, sizeof(int));
+  __builtin_memcpy(dst_payload, &to_net, sizeof(int));
+
+  udph->source = bpf_htons(info->src_port);
+  udph->dest = bpf_htons(info->dst_port);
+  udph->check = 0;
+
+  iph->saddr = info->src_ip;
+  iph->daddr = info->dst_ip;
+  iph->check = ip_checksum_xdp(iph);
+
+  return XDP_TX;
+}
+
+#else /* AXDP_INLINE */
+
+/* Total inline header, and the metadata needed to hold it and the descriptor. */
+#define AXDP_HDR_LEN                                                           \
+  (ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + AXDP_MPI_FIELDS)
+#define AXDP_META_NEED (((AXDP_TX_DESC_LEN + AXDP_HDR_LEN) + 3) & ~3U)
+
+/* In hardware. The header is built in the copy's own metadata and handed to
+ * the NIC as the WQE inline header; the NIC puts it on the wire in place of
+ * the packet's first AXDP_HDR_LEN bytes, which the driver leaves out of the
+ * DMA (AXDP_TX_REPLACE). The packet is never written to, so the frame keeps
+ * its length and no checksum is folded over packet memory.
+ */
+static __always_inline int forward_copy(struct xdp_md *ctx, struct ethhdr *eth,
+                                        struct iphdr *iph,
+                                        struct udphdr *udph, void *payload,
+                                        int from, int to,
+                                        const socket_id *info) {
+  /* Separately aligned locals, patched here and concatenated into the
+   * metadata below. One overlaid byte buffer would be simpler to write, but it
+   * puts the IP header at an odd offset on the stack and the verifier rejects
+   * the misaligned access.
+   */
+  struct ethhdr h_eth;
+  struct iphdr h_ip;
+  struct udphdr h_udp;
+  __u32 h_mpi[AXDP_MPI_FIELDS / sizeof(__u32)];
+  __u8 mac[ETH_ALEN];
+  void *meta;
+
+  /* The 58 bytes assume the canonical header: no IP options. */
+  if (iph->ihl != 5)
+    return XDP_PASS;
+  if ((char *)payload + AXDP_MPI_FIELDS > (char *)(long)ctx->data_end)
+    return XDP_PASS;
+
+  __builtin_memcpy(&h_eth, eth, sizeof(h_eth));
+  __builtin_memcpy(&h_ip, iph, sizeof(h_ip));
+  __builtin_memcpy(&h_udp, udph, sizeof(h_udp));
+  __builtin_memcpy(h_mpi, payload, sizeof(h_mpi));
+
+  __builtin_memcpy(mac, h_eth.h_source, ETH_ALEN);
+  __builtin_memcpy(h_eth.h_source, h_eth.h_dest, ETH_ALEN);
+  __builtin_memcpy(h_eth.h_dest, mac, ETH_ALEN);
+
+  h_udp.source = bpf_htons(info->src_port);
+  h_udp.dest = bpf_htons(info->dst_port);
+  h_udp.check = 0;
+
+  h_ip.saddr = info->src_ip;
+  h_ip.daddr = info->dst_ip;
+  h_ip.check = ip_checksum_xdp(&h_ip);
+
+  h_mpi[2] = bpf_htonl(from); /* src rank */
+  h_mpi[3] = bpf_htonl(to);   /* dst rank */
+
+  /* Grow the metadata to hold the descriptor and the header. The driver put
+   * AXDP_CLONE_META_SIZE bytes in front of a copy holding its index; that has
+   * already been read, and nothing else in there needs to survive.
+   */
+  if (bpf_xdp_adjust_meta(ctx,
+                          -(int)(AXDP_META_NEED - AXDP_CLONE_META_SIZE)) < 0)
+    return XDP_PASS;
+
+  meta = (void *)(long)ctx->data_meta;
+  if ((char *)meta + AXDP_META_NEED > (char *)(long)ctx->data)
+    return XDP_PASS;
+
+  meta = (char *)meta + AXDP_TX_DESC_LEN;
+  __builtin_memcpy(meta, &h_eth, sizeof(h_eth));
+  __builtin_memcpy((char *)meta + ETH_HLEN, &h_ip, sizeof(h_ip));
+  __builtin_memcpy((char *)meta + ETH_HLEN + sizeof(struct iphdr), &h_udp,
+                   sizeof(h_udp));
+  __builtin_memcpy((char *)meta + ETH_HLEN + sizeof(struct iphdr) +
+                       sizeof(struct udphdr),
+                   h_mpi, sizeof(h_mpi));
+
+  if (axdp_stamp_tx_replace(ctx, 0, AXDP_HDR_LEN) < 0)
+    return XDP_PASS;
+
+  return XDP_TX;
+}
+
+#endif /* AXDP_INLINE */
 
 static __always_inline int parse_ip_packet(struct xdp_md *ctx,
                                            struct ethhdr **out_eth,
@@ -379,31 +511,9 @@ static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
           socket_id *info_forwad_next =
               bpf_map_lookup_elem(&proc_to_address, &inter_dest);
           if (info_forwad_next) {
-            __u8 src_mac[ETH_ALEN];
-            __u8 dst_mac[ETH_ALEN];
-            __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
-            __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
-            __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
-            __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
-
-            int dst_net = bpf_htonl(dst_host);
-            int next_net = bpf_htonl(next);
-            // bpf_printk("new_src: %d next: %d", dst_host, next);
-            __builtin_memcpy(src_payload, &dst_net, sizeof(int));
-            __builtin_memcpy(dst_payload, &next_net, sizeof(int));
-
-            udph->source = bpf_htons(info_forwad_next->src_port);
-            udph->dest = bpf_htons(info_forwad_next->dst_port);
-            udph->check = 0;
-
-            iph->saddr = info_forwad_next->src_ip;
-            iph->daddr = info_forwad_next->dst_ip;
-            iph->check = ip_checksum_xdp(iph);
-            // //bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
-            // //bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
             count_tx++;
-            //bpf_printk("rank: %d,FWD to rank: %d, iter: %d", src_host, next, iter_copy);
-            return XDP_TX;
+            return forward_copy(ctx, eth, iph, udph, payload, dst_host,
+                                next, info_forwad_next);
           }
         }
       } else {
@@ -437,30 +547,9 @@ static __always_inline int handle_clone(struct xdp_md *ctx, struct ethhdr *eth,
           socket_id *info_forwad_next =
               bpf_map_lookup_elem(&proc_to_address, &inter_dest);
           if (info_forwad_next) {
-            __u8 src_mac[ETH_ALEN];
-            __u8 dst_mac[ETH_ALEN];
-            __builtin_memcpy(src_mac, eth->h_source, ETH_ALEN);
-            __builtin_memcpy(dst_mac, eth->h_dest, ETH_ALEN);
-            __builtin_memcpy(eth->h_source, dst_mac, ETH_ALEN);
-            __builtin_memcpy(eth->h_dest, src_mac, ETH_ALEN);
-
-            int dst_net = bpf_htonl(dst_host);
-            int next_net = bpf_htonl(next);
-            // bpf_printk("new_src: %d next: %d", dst_host, next);
-            __builtin_memcpy(src_payload, &dst_net, sizeof(int));
-            __builtin_memcpy(dst_payload, &next_net, sizeof(int));
-
-            udph->source = bpf_htons(info_forwad_next->src_port);
-            udph->dest = bpf_htons(info_forwad_next->dst_port);
-            udph->check = 0;
-
-            iph->saddr = info_forwad_next->src_ip;
-            iph->daddr = info_forwad_next->dst_ip;
-            iph->check = ip_checksum_xdp(iph);
-            // //bpf_printk("src_ip: %lu", bpf_ntohl(iph->saddr));
-            // //bpf_printk("dst_ip: %lu", bpf_ntohl(iph->daddr));
             count_tx++;
-            return XDP_TX;
+            return forward_copy(ctx, eth, iph, udph, payload, dst_host,
+                                next, info_forwad_next);
           }
         }
       } else {
