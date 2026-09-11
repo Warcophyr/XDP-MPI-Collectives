@@ -2638,6 +2638,28 @@ int mpi_bcast_ring(void *buf, int count, MPI_Datatype datatype, int root) {
   if (rank == root) {
     // printf("Process %d (root) sending to %d\n", rank, next);
     mpi_send(buf, count, datatype, next, tag);
+
+    /* mpi_send() is synchronous: it sends the datagram and then blocks on the
+     * destination ACK. Each hop of this ring therefore waits for the next rank
+     * to have the data -- but only for that one hop, so the root returned as
+     * soon as rank 1 had the payload and its elapsed time was one hop whatever
+     * the rank count: 0.083 ms at eight ranks, 0.089 at thirty-two, where the
+     * accelerated paths grow with N. Wait for the tail of the ring instead.
+     */
+    if (size > 1) {
+      int last = (root - 1 + size) % size;
+      void *done = malloc(MPI_HEADER);
+      if (!done) {
+        perror("malloc failed");
+        return -1;
+      }
+      int err = recv(MPI_PROCESS->socket_tcp_fd[last], done, MPI_HEADER, 0);
+      free(done);
+      if (err <= 0) {
+        fprintf(stderr, "Process %d: ring did not close (from %d)\n", rank, last);
+        return -1;
+      }
+    }
   } else {
     if (mpi_recv(buf, count, datatype, root, prev, tag) < 0) {
       fprintf(stderr, "Process %d: recv from %d failed\n", rank, prev);
@@ -2651,6 +2673,11 @@ int mpi_bcast_ring(void *buf, int count, MPI_Datatype datatype, int root) {
   if (next != root && rank != root) {
     mpi_send(buf, count, datatype, next, tag);
   }
+  /* The tail of the ring tells the root the broadcast is done. */
+  if (rank != root && next == root) {
+    __mpi_send_tcp_lost_packet(MPI_ACK, MPI_PROCESS->rank, root, tag, MPI_SEND);
+  }
+
   return 0;
 }
 

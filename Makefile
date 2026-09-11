@@ -13,7 +13,12 @@ SRC		  := my_ebpf.c
 all: MPI tc xdp mirror tx uprobe kprobe
 
 
-MPI: ./MPI.c
+# mpi_collective.c and the headers are compiled straight into this, so they
+# have to be prerequisites: without them an edit there leaves the old binary in
+# place and `make MPI` reports success, which is how a benchmark ends up run
+# against code that was never built.
+MPI: ./MPI.c $(SRC) mpi_collective.c mpi_collective.h mpi_struct.h \
+     mpi_global_variable.h my_ebpf.h packet.h hton.h Wtime.h
 # 	$(GCC) $(UFLAGS) $(GDB) $(SRC) $< -o $@ $(LIBS)
 	$(GCC) $(UFLAGS) $(SRC) $< -o $@ $(LIBS)
 

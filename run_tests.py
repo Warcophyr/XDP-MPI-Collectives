@@ -100,6 +100,19 @@ def parse_args():
         "-w", "--warmup", type=int, default=5, help="Warmup runs for MPI program"
     )
     parser.add_argument(
+        "-m",
+        "--iters",
+        type=int,
+        default=1,
+        help="Collectives timed per MPI run. One -- the default, and what this "
+        "always did -- makes every data point a single broadcast, whose "
+        "scheduling noise is of the same order as the quantity at small rank "
+        "counts: the spread was 90-170%% of the mean. Above one, only the "
+        "root's times are kept: the root blocks until all N-1 ACKs are in, so "
+        "its elapsed time is the collective's, while the other ranks report "
+        "their own arrival and would drag the statistics down.",
+    )
+    parser.add_argument(
         "-r",
         "--runs",
         type=int,
@@ -162,6 +175,7 @@ def format_output_suffix(args, timestamp):
         f"s-{sizes}"
         f"_n-{processes}"
         f"_w-{args.warmup}"
+        f"{'_m-' + str(args.iters) if args.iters > 1 else ''}"
         f"_r-{args.runs}"
         f"_a-{algorithms}"
         f"{indir_part}"
@@ -265,7 +279,7 @@ def set_ntuple_steering(interface, base_port, n, proto="udp4"):
             )
 
 
-def run_benchmark(interface, size, np, prog, warmup, algo):
+def run_benchmark(interface, size, np, prog, warmup, algo, iters=1):
     print(f"Running: size={size}, processes={np}, prog={prog}")
 
     # Run the MPI program
@@ -291,6 +305,8 @@ def run_benchmark(interface, size, np, prog, warmup, algo):
         str(np),
         "-a",
         algo,
+        "-m",
+        str(iters),
         "-o",
         temp_output,
     ]
@@ -320,6 +336,8 @@ def run_benchmark(interface, size, np, prog, warmup, algo):
                 for line in f:
                     parts = line.strip().split(",")
                     if len(parts) == 2:
+                        if iters > 1 and parts[0].strip() != "0":
+                            continue
                         try:
                             # Convert from seconds to microseconds
                             times.append(float(parts[1]) * 1000000)
@@ -533,6 +551,63 @@ def plot_median_times(
     plt.close()
 
 
+# Base algorithm of a sweep entry: "inline-linear" is measured as its own
+# algorithm but belongs in the same figure as "linear".
+def _base_algo(algo):
+    return algo[len("inline-"):] if algo.startswith("inline-") else algo
+
+
+def save_pgfplots_tables(runs_data, combinations, output_dir, stem, suffix):
+    r"""One \pgfplotstableread table per base algorithm and payload size.
+
+    Shape matches the paper's figures: a row per rank count, and a value/error
+    column pair per series -- naive, tc, xdp, and inline where it exists.
+    Values are the median over every collective of every run, errors the
+    standard deviation of the per-run medians, which is the spread that more
+    runs would actually reduce (see the stats CSV). Times in milliseconds.
+    """
+    series = {}
+    for idx, (size, np_, prog, algo) in enumerate(combinations):
+        values = [
+            v
+            for run in runs_data
+            for v in run[idx]
+            if isinstance(v, (int, float))
+        ]
+        if not values:
+            continue
+        per_run = [
+            statistics.median([v for v in run[idx] if isinstance(v, (int, float))])
+            for run in runs_data
+            if any(isinstance(v, (int, float)) for v in run[idx])
+        ]
+        name = "inline" if algo.startswith("inline-") else prog.lower()
+        series[(_base_algo(algo), size, np_, name)] = (
+            statistics.median(values) / 1000.0,
+            (statistics.stdev(per_run) if len(per_run) > 1 else 0.0) / 1000.0,
+        )
+
+    order = ["naive", "tc", "xdp", "inline"]
+    written = []
+    keys = sorted({(a, s) for a, s, _, _ in series})
+    for algo, size in keys:
+        nps = sorted({n for a, s, n, _ in series if (a, s) == (algo, size)})
+        names = [n for n in order
+                 if any((algo, size, np_, n) in series for np_ in nps)]
+        path = os.path.join(output_dir, f"pgf_{stem}_a-{algo}_s-{size}_{suffix}.dat")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("N\t" + "\t".join(f"{n}\t{n}_err" for n in names) + "\n")
+            for np_ in nps:
+                cells = []
+                for n in names:
+                    v = series.get((algo, size, np_, n))
+                    cells.append("nan\tnan" if v is None
+                                 else f"{v[0]:.6f}\t{v[1]:.6f}")
+                f.write(f"{np_}\t" + "\t".join(cells) + "\n")
+        written.append(path)
+    return written
+
+
 def main():
     args = parse_args()
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -593,7 +668,7 @@ def main():
                     args.interface, args.base_port, np, proto=args.steer_proto
                 )
             metrics = run_benchmark(
-                args.interface, size, np, prog, args.warmup, algo
+                args.interface, size, np, prog, args.warmup, algo, args.iters
             )
             if metrics:
                 current_run_data[i].extend(metrics)
@@ -632,13 +707,34 @@ def main():
         for row in results_matrix:
             writer.writerow([format_csv_value(value) for value in row])
 
-    # Compute statistics (avg of min/max per run and their stddev) and write to a separate CSV
+    # Statistics. avg_min/avg_max are the two extremes of each run, kept because
+    # they always been here, but they are the worst pair of estimators for these
+    # distributions: the slow tail is common to every program -- it comes from
+    # scheduling and from the barrier's skew, not from the datapath -- so
+    # avg_max comes out nearly equal for TC and XDP (1786.8 against 1780.6 us at
+    # 32 ranks) and hides a difference that the body of the distribution shows
+    # plainly (420 against 168). Hence the median and the percentiles below.
+    #
+    # The two spreads answer different questions, and the answer decides whether
+    # more runs would help: stddev_within is the spread between the collectives
+    # of one run, stddev_between the spread between the runs' own medians.
+    # Measured here the first is three to ten times the second, so -r buys
+    # nothing -- the dispersion is inside the run, not across runs.
     stats_headers = ["Metric"] + headers
-    stats_rows = [["avg_min"], ["stddev_min"], ["avg_max"], ["stddev_max"]]
+    metric_names = [
+        "avg_min", "stddev_min", "avg_max", "stddev_max",
+        "median", "p90", "p99", "mean", "stddev_within", "stddev_between",
+    ]
+    stats_rows = [[m] for m in metric_names]
+
+    def _pct(sorted_vals, q):
+        if not sorted_vals:
+            return ""
+        k = min(len(sorted_vals) - 1, int(q * len(sorted_vals)))
+        return sorted_vals[k]
 
     for col_idx in range(len(combinations)):
-        run_mins = []
-        run_maxs = []
+        run_mins, run_maxs, run_medians, per_run_sd, pooled = [], [], [], [], []
 
         for run_data in runs_data:
             col = run_data[col_idx]
@@ -646,21 +742,31 @@ def main():
             if valid_data:
                 run_mins.append(min(valid_data))
                 run_maxs.append(max(valid_data))
+                run_medians.append(statistics.median(valid_data))
+                if len(valid_data) > 1:
+                    per_run_sd.append(statistics.stdev(valid_data))
+                pooled.extend(valid_data)
 
-        if run_mins and run_maxs:
-            stats_rows[0].append(statistics.mean(run_mins))
-            stats_rows[1].append(
-                statistics.stdev(run_mins) if len(run_mins) > 1 else 0.0
-            )
-            stats_rows[2].append(statistics.mean(run_maxs))
-            stats_rows[3].append(
-                statistics.stdev(run_maxs) if len(run_maxs) > 1 else 0.0
-            )
-        else:
-            stats_rows[0].append("")
-            stats_rows[1].append("")
-            stats_rows[2].append("")
-            stats_rows[3].append("")
+        if not pooled:
+            for row in stats_rows:
+                row.append("")
+            continue
+
+        pooled.sort()
+        values = [
+            statistics.mean(run_mins),
+            statistics.stdev(run_mins) if len(run_mins) > 1 else 0.0,
+            statistics.mean(run_maxs),
+            statistics.stdev(run_maxs) if len(run_maxs) > 1 else 0.0,
+            statistics.median(pooled),
+            _pct(pooled, 0.90),
+            _pct(pooled, 0.99),
+            statistics.mean(pooled),
+            statistics.mean(per_run_sd) if per_run_sd else 0.0,
+            statistics.stdev(run_medians) if len(run_medians) > 1 else 0.0,
+        ]
+        for row, value in zip(stats_rows, values):
+            row.append(value)
 
     with open(stats_output, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
@@ -669,6 +775,11 @@ def main():
             writer.writerow([format_csv_value(value) for value in row])
 
     print(f"Statistics written to {stats_output}")
+
+    for path in save_pgfplots_tables(
+        runs_data, combinations, output_dir, output_stem, output_suffix
+    ):
+        print(f"pgfplots table written to {path}  (milliseconds)")
 
     csv_content = open(results_output).read()
     for size in args.sizes:
