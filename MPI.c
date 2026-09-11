@@ -14,6 +14,10 @@ FILE *fptr;
 int N = 1000;
 char outputname[64];
 int warmup_iterations = 0;
+/* Collectives timed per run. One is what this always did, and one is not
+ * enough: a broadcast at four ranks takes tens of microseconds, so a single
+ * sample carries scheduling noise of the same order as the quantity. */
+int measure_iterations = 1;
 
 #define GET_TIME()                                                             \
   ({                                                                           \
@@ -44,6 +48,8 @@ void help() {
          "program (default: lo)\n");
   printf("  -w, --warmup ITER     Set the number of warmup iterations before "
          "measurement (default: 0)\n");
+  printf("  -m, --iters ITER      Collectives to time per run; each writes a "
+         "row (default: 1)\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -71,9 +77,10 @@ int main(int argc, char *argv[]) {
       {"np", required_argument, 0, 'n'},
       {"interface", optional_argument, 0, 'i'},
       {"warmup", required_argument, 0, 'w'},
+      {"iters", required_argument, 0, 'm'},
       {0, 0, 0, 0}};
 
-  while ((option = getopt_long(argc, argv, "ho:v:n:i:ts:w:a:z", long_option,
+  while ((option = getopt_long(argc, argv, "ho:v:n:i:ts:w:a:zm:", long_option,
                                &option_index)) != -1) {
     switch (option) {
     case 'h':
@@ -153,6 +160,12 @@ int main(int argc, char *argv[]) {
     case 'w':
       warmup_iterations = atoi(optarg);
       printf("Warmup iterations: %d\n", warmup_iterations);
+      break;
+    case 'm':
+      measure_iterations = atoi(optarg);
+      if (measure_iterations < 1)
+        measure_iterations = 1;
+      printf("Measured iterations: %d\n", measure_iterations);
       break;
     case 'z':
       naive = 1;
@@ -441,13 +454,11 @@ int main(int argc, char *argv[]) {
         // clock_t start, end;
 
         // start = clock();
+        for (int m = 0; m < measure_iterations; m++) {
         double start = GET_TIME();
-        // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-        // mpi_bcast_ring_xdp_eager(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
         algo(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-        // mpi_bcast_linear_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
-        double end = GET_TIME();
 
+        double end = GET_TIME();
         mpi_barrier_ring();
         // mpi_bcast_ring_xdp(&y, sizeof(y) / sizeof(char), MPI_CHAR, 0);
         // mpi_barrier_ring();
@@ -468,8 +479,10 @@ int main(int argc, char *argv[]) {
           write(fileno(fptr), timing_buffer, bytes_written);
         }
 
-        fprintf(stderr, "Rank: %d  %lf sec\n", MPI_PROCESS->rank,
-                (double)(end - start));
+        if (m == measure_iterations - 1)
+          fprintf(stderr, "Rank: %d  %lf sec\n", MPI_PROCESS->rank,
+                  (double)(end - start));
+        }
 
         // double __cpu_time_used = 0.0;
         // // for (size_t _ = 0; _ < 10; _++) {
