@@ -9,5 +9,16 @@ kprobe
 out
 *.png
 AGENT.md
-.claude/MPI
+.claude/
+MPI
 temp_benchmark_output.csv
+
+# Build artefacts. No extension convention here, so they go by name.
+mirror/mirror
+mirror/tx
+profiling/uprobe
+profiling/kprobe
+
+# Measurement output. The CSVs already committed under test/ stay tracked --
+# .gitignore does not untrack anything -- so the archived runs are unaffected.
+*.csv
