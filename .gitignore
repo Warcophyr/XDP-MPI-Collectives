@@ -1,4 +1,4 @@
-results_*
+results*
 *.o
 *.bpf.o
 *.skel.h
